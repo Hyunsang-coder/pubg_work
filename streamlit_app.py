@@ -22,7 +22,7 @@ with st.sidebar:
     extra_prompt = st.text_area("번역 참고 프롬프트", height=120, placeholder="Tone, style, terminology rules...")
     glossary_file = st.file_uploader("용어집(JSON)", type=["json"])  # 선택
 
-for k in ["uploaded_path", "docs", "markdown", "translated_md"]:
+for k in ["uploaded_path", "docs", "markdown", "translated_md", "show_translation_tab"]:
     if k not in st.session_state:
         st.session_state[k] = None
 
@@ -47,15 +47,24 @@ with col2:
         start = time.time()
         with st.spinner("번역 중..."):
             st.session_state.translated_md = translate_markdown(st.session_state.markdown, cfg)
+            st.session_state.show_translation_tab = True
         elapsed = int(time.time() - start)
         st.info(f"번역 소요 시간: {elapsed//60}분 {elapsed%60}초")
+        st.rerun()  # Force refresh to switch to translation tab
 
-# Preview sections with built-in copy buttons
+# Tabbed preview sections
 if st.session_state.markdown:
-    st.subheader("Markdown 미리보기")
-    st.code(st.session_state.markdown, language="markdown")
-    st.download_button("Markdown 다운로드", st.session_state.markdown.encode("utf-8"), os.path.splitext(os.path.basename(st.session_state.uploaded_path))[0] + ".md")
-
-if st.session_state.translated_md:
-    st.subheader("번역본 미리보기")
-    st.code(st.session_state.translated_md, language="markdown")
+    # Auto-switch to translation tab if translation exists
+    default_tab = 1 if st.session_state.translated_md else 0
+    tab1, tab2 = st.tabs(["Markdown 미리보기", "번역본 미리보기"])
+    
+    with tab1:
+        st.code(st.session_state.markdown, language="markdown")
+        st.download_button("Markdown 다운로드", st.session_state.markdown.encode("utf-8"), 
+                          os.path.splitext(os.path.basename(st.session_state.uploaded_path))[0] + ".md")
+    
+    with tab2:
+        if st.session_state.translated_md:
+            st.code(st.session_state.translated_md, language="markdown")
+        else:
+            st.info("번역을 먼저 실행해주세요.")
