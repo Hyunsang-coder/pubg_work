@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PPTX → Markdown</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  </head>
+  <body>
+    <main class="container">
+      <h1>PPTX → Markdown 변환</h1>
+      <form action="/" method="post" enctype="multipart/form-data">
+        <label for="pptx_file">PPTX 파일 선택</label>
+        <input type="file" id="pptx_file" name="pptx_file" accept=".pptx" required />
+
+        <fieldset>
+          <legend>옵션</legend>
+          <label>
+            <input type="checkbox" name="with_notes" /> 발표자 노트 포함
+          </label>
+          <label>
+            그림 처리
+            <select name="figures">
+              <option value="placeholder" selected>자리표시(한 줄)</option>
+              <option value="omit">완전 제거</option>
+            </select>
+          </label>
+          <label>
+            차트 처리
+            <select name="charts">
+              <option value="labels" selected>제목 등 라벨만</option>
+              <option value="placeholder">자리표시만</option>
+              <option value="omit">완전 제거</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <button type="submit">변환</button>
+      </form>
+    </main>
+  </body>
+</html>
