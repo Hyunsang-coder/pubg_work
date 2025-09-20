@@ -7,9 +7,6 @@ from typing import Dict, List, Optional
 
 from openai import OpenAI
 from dotenv import load_dotenv, find_dotenv
-from .models import SlideDoc, TextBlock, TableBlock
-
-
 @dataclass
 class TranslationConfig:
     target_lang: str = "en"
@@ -87,72 +84,4 @@ def translate_markdown(md_text: str, config: TranslationConfig) -> str:
     return resp.choices[0].message.content or ""
 
 
-def shorten_line(line: str, max_chars: int, model: str | None = None) -> str:
-    try:
-        if line is None:
-            return ""
-        text = str(line)
-        if len(text) <= max_chars:
-            return text
-        client = _get_openai_client()
-        m = model or os.getenv("OPENAI_SHORTEN_MODEL", "gpt-4o-mini")
-        prompt = (
-            "Rephrase the sentence in English under "
-            f"{max_chars} characters while preserving key meaning. Do not change numbers or URLs.\n"
-            f"SOURCE: {text}"
-        )
-        resp = client.chat.completions.create(
-            model=m,
-            temperature=0.1,
-            messages=[
-                {"role": "system", "content": "You are a concise rephraser."},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        out = (resp.choices[0].message.content or text).strip()
-        return out[:max_chars] if len(out) > max_chars else out
-    except Exception:
-        # Fallback to safe truncation
-        try:
-            s = "" if line is None else str(line)
-            return s[:max_chars]
-        except Exception:
-            return ""
-
-
-def orchestrate_translation(docs: List[SlideDoc], config: TranslationConfig) -> List[SlideDoc]:
-    # 1. Flatten all text from docs into a single list
-    texts_to_translate: List[str] = []
-    source_map = []  # To map translations back
-    for i, doc in enumerate(docs):
-        for j, block in enumerate(doc.blocks):
-            if isinstance(block, TextBlock):
-                texts_to_translate.extend(block.lines)
-                for k in range(len(block.lines)):
-                    source_map.append((i, j, "text", k))
-            elif isinstance(block, TableBlock):
-                for r, row in enumerate(block.rows):
-                    texts_to_translate.extend(row)
-                    for c in range(len(row)):
-                        source_map.append((i, j, "table", r, c))
-
-    # 2. Translate in one batch
-    translated_texts = translate_texts(texts_to_translate, config)
-
-    # 3. Reconstruct translated docs using the source map
-    from copy import deepcopy
-    translated_docs: List[SlideDoc] = deepcopy(docs)
-    text_idx = 0
-    for i, doc in enumerate(translated_docs):
-        for j, block in enumerate(doc.blocks):
-            if isinstance(block, TextBlock):
-                num_lines = len(block.lines)
-                block.lines = translated_texts[text_idx : text_idx + num_lines]
-                text_idx += num_lines
-            elif isinstance(block, TableBlock):
-                for r, row in enumerate(block.rows):
-                    num_cells = len(row)
-                    block.rows[r] = translated_texts[text_idx : text_idx + num_cells]
-                    text_idx += num_cells
-
-    return translated_docs
+# 이전 함수들은 더 이상 사용되지 않아 삭제됨 (reinsert_v2.py에서 직접 처리)

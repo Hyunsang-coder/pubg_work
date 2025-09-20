@@ -6,7 +6,7 @@ from src.pptx2md.extract import extract_pptx_to_docs
 from src.pptx2md.markdown import docs_to_markdown
 from src.pptx2md.options import ExtractOptions
 from src.pptx2md.translate import translate_markdown, TranslationConfig
-from src.pptx2md.reinsert_v2 import create_translated_presentation_v2
+from src.pptx2md.ppt_generator import create_translated_presentation_v2
 
 load_dotenv()
 st.set_page_config(page_title="PPTX → Markdown", layout="centered")
