@@ -206,7 +206,7 @@ def create_translated_presentation_v2(
     for start in range(0, total, safe_batch_size):
         end = min(start + safe_batch_size, total)
         batch = texts_to_translate[start:end]
-        _log(f"번역 진행 중 ({end}/{total})")
+        _log(f"번역 진행 중 ({start + 1}~{end}/{total})")
         translated_batch = translate_texts(batch, config)
         translated_texts.extend(translated_batch)
 

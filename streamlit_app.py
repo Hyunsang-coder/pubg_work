@@ -1,5 +1,6 @@
 from __future__ import annotations
-import os, time, json, io, uuid, hashlib
+import os, time, json, io, uuid, hashlib, html
+from datetime import datetime
 import streamlit as st
 from dotenv import load_dotenv
 import sys
@@ -175,32 +176,36 @@ else:
 
 if "translation_logs" not in st.session_state:
     st.session_state.translation_logs = []
-
-log_section = st.container()
-with log_section:
-    st.subheader("진행 로그")
-    log_placeholder = st.empty()
+if "log_placeholder" not in st.session_state:
+    st.session_state.log_placeholder = None
 
 
 def _render_logs():
+    placeholder = st.session_state.get("log_placeholder")
+    if placeholder is None:
+        return
+
     if st.session_state.translation_logs:
-        formatted = "\n".join(f"- {msg}" for msg in st.session_state.translation_logs)
-        log_placeholder.markdown(formatted)
+        content = "<br/>".join(html.escape(msg) for msg in st.session_state.translation_logs)
+        html_block = (
+            "<div style='max-height:320px; overflow-y:auto; background-color:#0f1116; "
+            "padding:12px; border-radius:8px; font-family:monospace; font-size:13px;'>"
+            f"{content}</div>"
+        )
+        placeholder.markdown(html_block, unsafe_allow_html=True)
     else:
-        log_placeholder.markdown("_진행 로그가 여기에 표시됩니다._")
+        placeholder.markdown("_진행 로그가 여기에 표시됩니다._")
 
 
 def append_log(message: str):
-    st.session_state.translation_logs.append(message)
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    st.session_state.translation_logs.append(f"[{timestamp}] {message}")
     _render_logs()
 
 
 def reset_logs():
     st.session_state.translation_logs = []
     _render_logs()
-
-
-_render_logs()
 
 with st.sidebar:
     st.header("옵션")
@@ -325,9 +330,11 @@ if st.session_state.show_password_modal:
                     reset_logs()
                     append_log("Markdown 번역 준비 중...")
                     glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
+                    if glossary:
+                        append_log(f"용어집 적용: {len(glossary)}개 항목")
                     cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
                     start = time.time()
-                    append_log("Markdown 번역 요청 전송")
+                    append_log(f"Markdown 번역 요청 전송 — 글자 수 {len(st.session_state.markdown or ''):,}자")
                     with st.spinner("번역 중..."):
                         st.session_state.translated_md = translate_markdown(st.session_state.markdown, cfg)
                         st.session_state.show_translation_tab = True
@@ -340,6 +347,8 @@ if st.session_state.show_password_modal:
                     reset_logs()
                     append_log("PPT 번역 준비 중...")
                     glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
+                    if glossary:
+                        append_log(f"용어집 적용: {len(glossary)}개 항목")
                     cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
                     
                     # 번역된 PPT 파일명 생성
@@ -352,7 +361,8 @@ if st.session_state.show_password_modal:
                             pass
                     
                     start = time.time()
-                    append_log("PPT 번역 및 생성 시작")
+                    slide_count = len(st.session_state.docs) if st.session_state.docs else "?"
+                    append_log(f"PPT 번역 및 생성 시작 — 대상 슬라이드 {slide_count}")
                     with st.spinner("PPT 번역 및 생성 중..."):
                         create_translated_presentation_v2(
                             st.session_state.uploaded_path,
@@ -379,10 +389,13 @@ if st.session_state.show_password_modal:
 col1, col2, col3 = st.columns(3)
 with col1:
     if st.button("Markdown 변환", use_container_width=True, disabled=not st.session_state.uploaded_path):
+        reset_logs()
+        append_log("슬라이드에서 텍스트 추출 시작")
         opts = ExtractOptions(with_notes=with_notes, figures=figures, charts=charts)
         docs = extract_pptx_to_docs(st.session_state.uploaded_path, opts)
         st.session_state.docs = docs
         st.session_state.markdown = docs_to_markdown(docs, opts)
+        append_log(f"Markdown 생성 완료 — 슬라이드 {len(docs)}개")
 
 with col2:
     if st.button("번역 (Markdown)", use_container_width=True, disabled=not st.session_state.markdown):
@@ -420,3 +433,10 @@ if st.session_state.markdown:
             st.code(st.session_state.translated_md, language="markdown")
         else:
             st.info("번역을 먼저 실행해주세요.")
+
+st.divider()
+with st.container():
+    st.subheader("진행 로그")
+    st.caption("로그가 길어지면 스크롤하여 확인하세요.")
+    st.session_state.log_placeholder = st.empty()
+    _render_logs()
