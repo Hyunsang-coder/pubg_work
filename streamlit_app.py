@@ -126,7 +126,18 @@ def _validate_glossary(glossary: dict) -> dict:
 
 load_dotenv()
 st.set_page_config(page_title="PPT 번역 솔루션", layout="centered")
-st.title("PPT 번역 솔루션")
+
+# 헤더 로고: 파일이 존재할 때만 표시해 레이아웃을 깨뜨리지 않는다
+logo_path = os.path.join(ROOT_DIR, "assets", "ppt_logo.png")
+header_cols = st.columns([1, 8]) if os.path.exists(logo_path) else None
+
+if header_cols:
+    with header_cols[0]:
+        st.image(logo_path, width=80)
+    with header_cols[1]:
+        st.title("PPT 번역 솔루션")
+else:
+    st.title("PPT 번역 솔루션")
 
 with st.sidebar:
     st.header("옵션")
