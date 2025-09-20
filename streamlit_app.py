@@ -6,6 +6,7 @@ from src.pptx2md.extract import extract_pptx_to_docs
 from src.pptx2md.markdown import docs_to_markdown
 from src.pptx2md.options import ExtractOptions
 from src.pptx2md.translate import translate_markdown, TranslationConfig
+from src.pptx2md.reinsert_v2 import create_translated_presentation_v2
 
 load_dotenv()
 st.set_page_config(page_title="PPTX → Markdown", layout="centered")
@@ -32,7 +33,7 @@ if uploaded:
     with open(tmp_path, "wb") as f: f.write(uploaded.read())
     st.session_state.uploaded_path = tmp_path
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
     if st.button("Markdown 변환", use_container_width=True, disabled=not st.session_state.uploaded_path):
         opts = ExtractOptions(with_notes=with_notes, figures=figures, charts=charts)
@@ -41,7 +42,7 @@ with col1:
         st.session_state.markdown = docs_to_markdown(docs, opts)
 
 with col2:
-    if st.button("번역 (Markdown 기반)", use_container_width=True, disabled=not st.session_state.markdown):
+    if st.button("번역 (Markdown)", use_container_width=True, disabled=not st.session_state.markdown):
         glossary = json.loads(glossary_file.getvalue()) if glossary_file else None
         cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
         start = time.time()
@@ -51,6 +52,30 @@ with col2:
         elapsed = int(time.time() - start)
         st.info(f"번역 소요 시간: {elapsed//60}분 {elapsed%60}초")
         st.rerun()  # Force refresh to switch to translation tab
+
+with col3:
+    if st.button("번역된 PPT 생성", use_container_width=True, disabled=not st.session_state.uploaded_path):
+        glossary = json.loads(glossary_file.getvalue()) if glossary_file else None
+        cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
+        
+        # 번역된 PPT 파일명 생성
+        base_name = os.path.splitext(os.path.basename(st.session_state.uploaded_path))[0]
+        output_pptx = os.path.abspath(f"{base_name}_translated.pptx")
+        
+        start = time.time()
+        with st.spinner("PPT 번역 및 생성 중..."):
+            create_translated_presentation_v2(st.session_state.uploaded_path, output_pptx, cfg)
+        elapsed = int(time.time() - start)
+        st.success(f"PPT 생성 완료! 소요 시간: {elapsed//60}분 {elapsed%60}초")
+        
+        # 다운로드 버튼
+        with open(output_pptx, "rb") as f:
+            st.download_button(
+                "번역된 PPT 다운로드",
+                data=f.read(),
+                file_name=f"{base_name}_translated.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            )
 
 # Tabbed preview sections
 if st.session_state.markdown:
