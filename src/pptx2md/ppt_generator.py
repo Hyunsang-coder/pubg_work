@@ -122,23 +122,52 @@ def create_translated_presentation_v2(
     
     for slide_idx, slide in enumerate(prs.slides):
         for shape in _iter_shapes(slide.shapes):
+            # 표 도형은 셀 단위로 텍스트를 별도로 다룬다
+            if getattr(shape, 'has_table', False) and shape.has_table:
+                table = shape.table
+                for row in table.rows:
+                    for cell in row.cells:
+                        if not cell.text_frame:
+                            continue
+                        for para_idx, paragraph in enumerate(cell.text_frame.paragraphs):
+                            if not paragraph.runs:
+                                continue
+
+                            full_paragraph_text = "".join(run.text for run in paragraph.runs)
+                            if not full_paragraph_text.strip():
+                                continue
+
+                            first_run_font = _extract_font_properties(paragraph.runs[0])
+                            para_info = ParagraphInfo(
+                                slide_idx=slide_idx,
+                                shape_id=str(shape.shape_id),
+                                paragraph_idx=para_idx,
+                                original_text=full_paragraph_text,
+                                first_run_font=first_run_font,
+                                paragraph_ref=paragraph,
+                            )
+
+                            paragraph_infos.append(para_info)
+                            texts_to_translate.append(full_paragraph_text)
+                continue
+
             if not hasattr(shape, 'text_frame') or not shape.text_frame:
                 continue
-                
+
             text_frame = shape.text_frame
             for para_idx, paragraph in enumerate(text_frame.paragraphs):
                 if not paragraph.runs:
                     continue
-                    
+
                 # 3. 단락 단위 텍스트 통합
                 full_paragraph_text = "".join(run.text for run in paragraph.runs)
-                
+
                 if not full_paragraph_text.strip():
                     continue
-                
+
                 # 첫 번째 run의 서식 정보 저장
                 first_run_font = _extract_font_properties(paragraph.runs[0])
-                
+
                 # 단락 정보 저장
                 para_info = ParagraphInfo(
                     slide_idx=slide_idx,
@@ -148,7 +177,7 @@ def create_translated_presentation_v2(
                     first_run_font=first_run_font,
                     paragraph_ref=paragraph
                 )
-                
+
                 paragraph_infos.append(para_info)
                 texts_to_translate.append(full_paragraph_text)
     
