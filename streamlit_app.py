@@ -2,6 +2,12 @@ from __future__ import annotations
 import os, time, json
 import streamlit as st
 from dotenv import load_dotenv
+import sys
+
+# Ensure project root is on sys.path for Streamlit Cloud
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 from src.pptx2md.extract import extract_pptx_to_docs
 from src.pptx2md.markdown import docs_to_markdown
 from src.pptx2md.options import ExtractOptions
