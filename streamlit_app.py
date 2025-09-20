@@ -12,6 +12,10 @@ except ImportError:
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
+# Also add parent dir as fallback for environments like Streamlit Cloud
+PARENT_DIR = os.path.dirname(ROOT_DIR)
+if PARENT_DIR not in sys.path:
+    sys.path.insert(0, PARENT_DIR)
 from src.pptx2md.extract import extract_pptx_to_docs
 from src.pptx2md.markdown import docs_to_markdown
 from src.pptx2md.options import ExtractOptions
@@ -171,7 +175,7 @@ with st.sidebar:
                 if len(glossary_preview) > 10:
                     st.write(f"... 외 {len(glossary_preview) - 10}개 항목")
 
-for k in ["uploaded_path", "docs", "markdown", "translated_md", "show_translation_tab", "show_password_modal", "password_for"]:
+for k in ["uploaded_path", "docs", "markdown", "translated_md", "show_translation_tab", "show_password_modal", "password_for", "output_pptx_path", "output_pptx_name"]:
     if k not in st.session_state:
         st.session_state[k] = None
 
@@ -240,14 +244,9 @@ if st.session_state.show_password_modal:
                     elapsed = int(time.time() - start)
                     st.success(f"PPT 생성 완료! 소요 시간: {elapsed//60}분 {elapsed%60}초")
                     
-                    # 다운로드 버튼
-                    with open(output_pptx, "rb") as f:
-                        st.download_button(
-                            "번역된 PPT 다운로드",
-                            data=f.read(),
-                            file_name=f"{base_name}_translated.pptx",
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                        )
+                    # Form 밖에서 다운로드 버튼 렌더링을 위해 경로 저장 후 리런
+                    st.session_state.output_pptx_path = output_pptx
+                    st.session_state.output_pptx_name = f"{base_name}_translated.pptx"
                     st.rerun()
             else:
                 st.error("비밀번호가 올바르지 않습니다.")
@@ -274,6 +273,16 @@ with col3:
     if st.button("번역된 PPT 생성", use_container_width=True, disabled=not st.session_state.uploaded_path):
         show_password_modal("translate_ppt")
         st.rerun()
+
+# 폼 외부에서 다운로드 버튼 렌더링
+if st.session_state.output_pptx_path and os.path.exists(st.session_state.output_pptx_path):
+    with open(st.session_state.output_pptx_path, "rb") as f:
+        st.download_button(
+            "번역된 PPT 다운로드",
+            data=f.read(),
+            file_name=st.session_state.output_pptx_name or os.path.basename(st.session_state.output_pptx_path),
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
 
 # Tabbed preview sections
 if st.session_state.markdown:
