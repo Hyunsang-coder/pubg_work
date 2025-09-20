@@ -3,6 +3,10 @@ import os, time, json
 import streamlit as st
 from dotenv import load_dotenv
 import sys
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 
 # Ensure project root is on sys.path for Streamlit Cloud
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -14,30 +18,244 @@ from src.pptx2md.options import ExtractOptions
 from src.pptx2md.translate import translate_markdown, TranslationConfig
 from src.pptx2md.ppt_generator import create_translated_presentation_v2
 
+# 용어집 파일 제한 설정
+MAX_GLOSSARY_ENTRIES = 500  # 최대 용어 개수
+MAX_FILE_SIZE_MB = 5        # 최대 파일 크기 (MB)
+MAX_TERM_LENGTH = 100       # 개별 용어 최대 길이
+
+def load_glossary_from_file(uploaded_file) -> dict:
+    """업로드된 파일에서 용어집을 로드합니다. JSON과 엑셀 파일을 모두 지원합니다."""
+    if uploaded_file is None:
+        return None
+    
+    # 파일 크기 체크
+    file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+    if file_size_mb > MAX_FILE_SIZE_MB:
+        st.error(f"파일 크기가 너무 큽니다. 최대 {MAX_FILE_SIZE_MB}MB까지 지원됩니다. (현재: {file_size_mb:.1f}MB)")
+        return None
+    
+    file_extension = uploaded_file.name.lower().split('.')[-1]
+    
+    if file_extension == 'json':
+        # 기존 JSON 파일 처리 (기존 로직 완전 유지)
+        try:
+            glossary = json.loads(uploaded_file.getvalue())
+            if not isinstance(glossary, dict):
+                st.error("JSON 파일은 딕셔너리 형태여야 합니다.")
+                return None
+            return _validate_glossary(glossary)
+        except json.JSONDecodeError as e:
+            st.error(f"JSON 파일 형식이 올바르지 않습니다: {str(e)}")
+            return None
+    
+    elif file_extension in ['xlsx', 'xls']:
+        # 새로운 엑셀 파일 처리
+        if pd is None:
+            st.error("엑셀 파일 처리를 위해 pandas가 필요합니다. requirements.txt를 확인해주세요.")
+            return None
+            
+        try:
+            df = pd.read_excel(uploaded_file)
+            
+            # 기본 검증
+            if len(df.columns) < 2:
+                st.error("엑셀 파일은 최소 2개의 컬럼이 필요합니다 (원문, 번역)")
+                return None
+            
+            # 행 수 체크
+            if len(df) > MAX_GLOSSARY_ENTRIES:
+                st.error(f"용어 개수가 너무 많습니다. 최대 {MAX_GLOSSARY_ENTRIES}개까지 지원됩니다. (현재: {len(df)}개)")
+                return None
+            
+            # NaN 값 제거하고 딕셔너리로 변환
+            glossary = {}
+            skipped_rows = 0
+            
+            for idx, row in df.iterrows():
+                source = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                target = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
+                
+                # 빈 값 체크
+                if not source or not target:
+                    skipped_rows += 1
+                    continue
+                
+                # 용어 길이 체크
+                if len(source) > MAX_TERM_LENGTH or len(target) > MAX_TERM_LENGTH:
+                    st.warning(f"행 {idx + 2}: 용어가 너무 깁니다 (최대 {MAX_TERM_LENGTH}자). 건너뜁니다.")
+                    skipped_rows += 1
+                    continue
+                
+                glossary[source] = target
+            
+            if skipped_rows > 0:
+                st.info(f"{skipped_rows}개 행이 건너뛰어졌습니다 (빈 값 또는 너무 긴 용어)")
+            
+            return _validate_glossary(glossary)
+            
+        except Exception as e:
+            st.error(f"엑셀 파일 읽기 오류: {str(e)}")
+            return None
+    
+    else:
+        st.error("지원하지 않는 파일 형식입니다. JSON 또는 엑셀 파일을 업로드해주세요.")
+        return None
+
+def _validate_glossary(glossary: dict) -> dict:
+    """용어집 최종 검증"""
+    if not glossary:
+        st.warning("용어집이 비어있습니다.")
+        return None
+    
+    if len(glossary) > MAX_GLOSSARY_ENTRIES:
+        st.error(f"용어 개수가 너무 많습니다. 최대 {MAX_GLOSSARY_ENTRIES}개까지 지원됩니다.")
+        return None
+    
+    # 중복 제거 및 통계
+    original_count = len(glossary)
+    glossary = {k.strip(): v.strip() for k, v in glossary.items() if k.strip() and v.strip()}
+    
+    if len(glossary) != original_count:
+        st.info(f"중복 또는 빈 항목 제거됨: {original_count} → {len(glossary)}개")
+    
+    return glossary
+
 load_dotenv()
-st.set_page_config(page_title="PPTX → Markdown", layout="centered")
-st.title("PPTX → Markdown 변환")
+st.set_page_config(page_title="PPT 번역 솔루션", layout="centered")
+st.title("PPT 번역 솔루션")
 
 with st.sidebar:
     st.header("옵션")
     with_notes = st.checkbox("발표자 노트 포함", value=False)
-    figures = st.selectbox("그림 처리", ["placeholder", "omit"], index=0)
-    charts = st.selectbox("차트 처리", ["labels", "placeholder", "omit"], index=0)
+    # UI에서는 한국어로 표시하되 실제 값은 영어로 매핑
+    figures_display = st.selectbox("그림 처리", ["플레이스홀더", "생략"], index=0)
+    figures_map = {"플레이스홀더": "placeholder", "생략": "omit"}
+    figures = figures_map[figures_display]
+    
+    charts_display = st.selectbox("차트 처리", ["레이블", "플레이스홀더", "생략"], index=0)
+    charts_map = {"레이블": "labels", "플레이스홀더": "placeholder", "생략": "omit"}
+    charts = charts_map[charts_display]
     st.divider()
     st.subheader("번역(영어)")
     model = st.selectbox("OpenAI 모델", ["gpt-5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini", "gpt-5-nano"], index=3)
-    extra_prompt = st.text_area("번역 참고 프롬프트", height=120, placeholder="Tone, style, terminology rules...")
-    glossary_file = st.file_uploader("용어집(JSON)", type=["json"])  # 선택
+    default_prompt = """당신은 시니어 번역사입니다. PPT 번역 시:
+- 원문 의미 유지하되 간결하게 번역
+- 번역문이 원문보다 20% 이상 길어지지 않게 제한
+- 자연스럽고 비즈니스에 적합한 표현 사용"""
+    
+    extra_prompt = st.text_area("번역 프롬프트", value=default_prompt, height=120, placeholder="톤, 스타일, 용어 규칙 등...")
+    
+    # 용어집 파일 제한사항 안내
+    st.write("**용어집 파일 제한사항:**")
+    st.caption(f"• 최대 파일 크기: {MAX_FILE_SIZE_MB}MB")
+    st.caption(f"• 최대 용어 개수: {MAX_GLOSSARY_ENTRIES}개")
+    st.caption(f"• 개별 용어 최대 길이: {MAX_TERM_LENGTH}자")
+    
+    # 용어집 파일 업로더 - JSON과 엑셀 모두 지원
+    glossary_file = st.file_uploader(
+        "용어집 파일", 
+        type=["json", "xlsx", "xls"],
+        help="JSON 파일 또는 엑셀 파일을 업로드하세요. 엑셀의 경우 첫 번째 컬럼은 원문, 두 번째 컬럼은 번역어로 구성해주세요."
+    )
+    
+    # 용어집 미리보기
+    if glossary_file:
+        glossary_preview = load_glossary_from_file(glossary_file)
+        if glossary_preview:
+            st.success(f"✅ 용어집 로드 완료: {len(glossary_preview)}개 항목")
+            
+            with st.expander("용어집 미리보기", expanded=False):
+                preview_items = list(glossary_preview.items())[:10]  # 처음 10개만 표시
+                for source, target in preview_items:
+                    st.write(f"• `{source}` → `{target}`")
+                if len(glossary_preview) > 10:
+                    st.write(f"... 외 {len(glossary_preview) - 10}개 항목")
 
-for k in ["uploaded_path", "docs", "markdown", "translated_md", "show_translation_tab"]:
+for k in ["uploaded_path", "docs", "markdown", "translated_md", "show_translation_tab", "show_password_modal", "password_for"]:
     if k not in st.session_state:
         st.session_state[k] = None
+
+def check_password(entered_password: str) -> bool:
+    """환경변수 PASSWORD와 입력된 비밀번호를 비교"""
+    correct_password = os.getenv("PASSWORD")
+    if not correct_password:
+        st.error("비밀번호가 환경변수에 설정되지 않았습니다.")
+        return False
+    return entered_password == correct_password
+
+def show_password_modal(action_type: str):
+    """비밀번호 입력 모달을 표시"""
+    st.session_state.show_password_modal = True
+    st.session_state.password_for = action_type
 
 uploaded = st.file_uploader("PPTX 파일 업로드", type=["pptx"]) 
 if uploaded:
     tmp_path = os.path.abspath(f"_tmp_{uploaded.name}")
     with open(tmp_path, "wb") as f: f.write(uploaded.read())
     st.session_state.uploaded_path = tmp_path
+
+# 비밀번호 모달 처리
+if st.session_state.show_password_modal:
+    with st.form("password_form"):
+        st.subheader("🔒 번역 기능 접근")
+        st.write("번역 기능을 사용하려면 비밀번호를 입력해주세요.")
+        entered_password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
+        
+        col_submit, col_cancel = st.columns(2)
+        with col_submit:
+            submit_password = st.form_submit_button("확인", use_container_width=True)
+        with col_cancel:
+            cancel_password = st.form_submit_button("취소", use_container_width=True)
+        
+        if submit_password:
+            if check_password(entered_password):
+                st.success("비밀번호가 확인되었습니다!")
+                action_type = st.session_state.password_for
+                st.session_state.show_password_modal = False
+                st.session_state.password_for = None
+                
+                # 비밀번호 확인 후 해당 액션 실행
+                if action_type == "translate_markdown":
+                    glossary = load_glossary_from_file(glossary_file)
+                    cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
+                    start = time.time()
+                    with st.spinner("번역 중..."):
+                        st.session_state.translated_md = translate_markdown(st.session_state.markdown, cfg)
+                        st.session_state.show_translation_tab = True
+                    elapsed = int(time.time() - start)
+                    st.info(f"번역 소요 시간: {elapsed//60}분 {elapsed%60}초")
+                    st.rerun()
+                    
+                elif action_type == "translate_ppt":
+                    glossary = load_glossary_from_file(glossary_file)
+                    cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
+                    
+                    # 번역된 PPT 파일명 생성
+                    base_name = os.path.splitext(os.path.basename(st.session_state.uploaded_path))[0]
+                    output_pptx = os.path.abspath(f"{base_name}_translated.pptx")
+                    
+                    start = time.time()
+                    with st.spinner("PPT 번역 및 생성 중..."):
+                        create_translated_presentation_v2(st.session_state.uploaded_path, output_pptx, cfg)
+                    elapsed = int(time.time() - start)
+                    st.success(f"PPT 생성 완료! 소요 시간: {elapsed//60}분 {elapsed%60}초")
+                    
+                    # 다운로드 버튼
+                    with open(output_pptx, "rb") as f:
+                        st.download_button(
+                            "번역된 PPT 다운로드",
+                            data=f.read(),
+                            file_name=f"{base_name}_translated.pptx",
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                        )
+                    st.rerun()
+            else:
+                st.error("비밀번호가 올바르지 않습니다.")
+        
+        if cancel_password:
+            st.session_state.show_password_modal = False
+            st.session_state.password_for = None
+            st.rerun()
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -49,39 +267,13 @@ with col1:
 
 with col2:
     if st.button("번역 (Markdown)", use_container_width=True, disabled=not st.session_state.markdown):
-        glossary = json.loads(glossary_file.getvalue()) if glossary_file else None
-        cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
-        start = time.time()
-        with st.spinner("번역 중..."):
-            st.session_state.translated_md = translate_markdown(st.session_state.markdown, cfg)
-            st.session_state.show_translation_tab = True
-        elapsed = int(time.time() - start)
-        st.info(f"번역 소요 시간: {elapsed//60}분 {elapsed%60}초")
-        st.rerun()  # Force refresh to switch to translation tab
+        show_password_modal("translate_markdown")
+        st.rerun()
 
 with col3:
     if st.button("번역된 PPT 생성", use_container_width=True, disabled=not st.session_state.uploaded_path):
-        glossary = json.loads(glossary_file.getvalue()) if glossary_file else None
-        cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
-        
-        # 번역된 PPT 파일명 생성
-        base_name = os.path.splitext(os.path.basename(st.session_state.uploaded_path))[0]
-        output_pptx = os.path.abspath(f"{base_name}_translated.pptx")
-        
-        start = time.time()
-        with st.spinner("PPT 번역 및 생성 중..."):
-            create_translated_presentation_v2(st.session_state.uploaded_path, output_pptx, cfg)
-        elapsed = int(time.time() - start)
-        st.success(f"PPT 생성 완료! 소요 시간: {elapsed//60}분 {elapsed%60}초")
-        
-        # 다운로드 버튼
-        with open(output_pptx, "rb") as f:
-            st.download_button(
-                "번역된 PPT 다운로드",
-                data=f.read(),
-                file_name=f"{base_name}_translated.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            )
+        show_password_modal("translate_ppt")
+        st.rerun()
 
 # Tabbed preview sections
 if st.session_state.markdown:
