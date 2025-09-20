@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Tuple, Dict, Any
+from typing import List, Dict, Any, Callable, Optional
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
 from pptx.shapes.shapetree import SlideShapes
@@ -101,9 +101,12 @@ def _apply_font_properties(run, font_props: Dict[str, Any]):
 
 
 def create_translated_presentation_v2(
-    input_pptx: str, 
-    output_pptx: str, 
-    config: TranslationConfig
+    input_pptx: str,
+    output_pptx: str,
+    config: TranslationConfig,
+    *,
+    progress_callback: Optional[Callable[[str], None]] = None,
+    batch_size: int = 200,
 ) -> None:
     """
     하이브리드 접근 방식으로 프레젠테이션을 번역하는 함수
@@ -181,13 +184,33 @@ def create_translated_presentation_v2(
                 paragraph_infos.append(para_info)
                 texts_to_translate.append(full_paragraph_text)
     
+    def _log(message: str) -> None:
+        if progress_callback:
+            try:
+                progress_callback(message)
+            except Exception:
+                pass
+
     # 4. 일괄 번역
     if not texts_to_translate:
         # 번역할 텍스트가 없으면 원본 복사
+        _log("번역할 문장이 없어 원본 PPT를 그대로 저장합니다.")
         prs.save(output_pptx)
         return
-    
-    translated_texts = translate_texts(texts_to_translate, config)
+
+    total = len(texts_to_translate)
+    _log(f"슬라이드 분석 완료: 총 {total}개 문장")
+    translated_texts: List[str] = []
+    safe_batch_size = max(1, batch_size)
+
+    for start in range(0, total, safe_batch_size):
+        end = min(start + safe_batch_size, total)
+        batch = texts_to_translate[start:end]
+        _log(f"번역 진행 중 ({end}/{total})")
+        translated_batch = translate_texts(batch, config)
+        translated_texts.extend(translated_batch)
+
+    _log("번역된 문장을 PPT에 반영 중...")
     
     # 5. 번역된 텍스트 재삽입
     for para_info, translated_text in zip(paragraph_infos, translated_texts):
@@ -213,7 +236,7 @@ def create_translated_presentation_v2(
         except Exception:
             # 개별 단락 처리 실패 시 무시하고 계속 진행
             continue
-    
+    _log("번역 결과 저장 완료")
     # 6. 프레젠테이션 저장
     prs.save(output_pptx)
 
