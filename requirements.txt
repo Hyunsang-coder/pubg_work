@@ -1,7 +1,5 @@
-Flask==3.1.2
 python-pptx==1.0.2
 python-dotenv==1.1.1
 pydantic==2.11.9
-replit==4.1.2
 streamlit==1.49.1
 openai==1.108.0
