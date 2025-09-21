@@ -417,6 +417,13 @@ if st.session_state.output_pptx_path and os.path.exists(st.session_state.output_
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
         )
 
+st.divider()
+with st.container():
+    st.subheader("진행 로그")
+    st.caption("로그가 길어지면 스크롤하여 확인하세요.")
+    st.session_state.log_placeholder = st.empty()
+    _render_logs()
+
 # Tabbed preview sections
 if st.session_state.markdown:
     # Auto-switch to translation tab if translation exists
@@ -424,19 +431,12 @@ if st.session_state.markdown:
     tab1, tab2 = st.tabs(["Markdown 미리보기", "번역본 미리보기"])
     
     with tab1:
-        st.code(st.session_state.markdown, language="markdown")
+        st.code(st.session_state.markdown, language="markdown", height=400)
         st.download_button("Markdown 다운로드", st.session_state.markdown.encode("utf-8"), 
                           os.path.splitext(os.path.basename(st.session_state.uploaded_path))[0] + ".md")
     
     with tab2:
         if st.session_state.translated_md:
-            st.code(st.session_state.translated_md, language="markdown")
+            st.code(st.session_state.translated_md, language="markdown", height=400)
         else:
             st.info("번역을 먼저 실행해주세요.")
-
-st.divider()
-with st.container():
-    st.subheader("진행 로그")
-    st.caption("로그가 길어지면 스크롤하여 확인하세요.")
-    st.session_state.log_placeholder = st.empty()
-    _render_logs()
