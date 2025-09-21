@@ -256,22 +256,75 @@ with st.sidebar:
     else:
         get_glossary_from_upload(None)
 
-for k in ["uploaded_path", "docs", "markdown", "translated_md", "show_translation_tab", "show_password_modal", "password_for", "output_pptx_path", "output_pptx_name"]:
+for k in ["uploaded_path", "docs", "markdown", "translated_md", "show_translation_tab", "output_pptx_path", "output_pptx_name"]:
     if k not in st.session_state:
         st.session_state[k] = None
 
-def check_password(entered_password: str) -> bool:
-    """환경변수 PASSWORD와 입력된 비밀번호를 비교"""
-    correct_password = os.getenv("PASSWORD")
-    if not correct_password:
-        st.error("비밀번호가 환경변수에 설정되지 않았습니다.")
-        return False
-    return entered_password == correct_password
+if "last_action" not in st.session_state:
+    st.session_state.last_action = None
 
-def show_password_modal(action_type: str):
-    """비밀번호 입력 모달을 표시"""
-    st.session_state.show_password_modal = True
-    st.session_state.password_for = action_type
+
+def run_action(action_type: str):
+    """공통 액션 실행 함수"""
+    try:
+        if action_type == "translate_markdown":
+            reset_logs()
+            append_log("Markdown 번역 준비 중...")
+            glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
+            if glossary:
+                append_log(f"용어집 적용: {len(glossary)}개 항목")
+            cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
+
+            start = time.time()
+            append_log(f"Markdown 번역 요청 전송 — 글자 수 {len(st.session_state.markdown or ''):,}자")
+            with st.spinner("번역 중..."):
+                st.session_state.translated_md = translate_markdown(st.session_state.markdown, cfg)
+                st.session_state.show_translation_tab = True
+            elapsed = int(time.time() - start)
+            append_log(f"Markdown 번역 완료 ({elapsed//60}분 {elapsed%60}초)")
+            st.info(f"번역 소요 시간: {elapsed//60}분 {elapsed%60}초")
+            st.session_state.last_action = "translate_markdown"
+            st.rerun()
+
+        elif action_type == "translate_ppt":
+            reset_logs()
+            append_log("PPT 번역 준비 중...")
+            glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
+            if glossary:
+                append_log(f"용어집 적용: {len(glossary)}개 항목")
+            cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
+
+            base_name = os.path.splitext(st.session_state.get("uploaded_original_name") or os.path.basename(st.session_state.uploaded_path))[0]
+            output_pptx = os.path.abspath(f"{base_name}_translated.pptx")
+            if st.session_state.output_pptx_path and os.path.exists(st.session_state.output_pptx_path):
+                try:
+                    os.remove(st.session_state.output_pptx_path)
+                except OSError:
+                    pass
+
+            start = time.time()
+            slide_count = len(st.session_state.docs) if st.session_state.docs else "?"
+            append_log(f"PPT 번역 및 생성 시작 — 대상 슬라이드 {slide_count}")
+            with st.spinner("PPT 번역 및 생성 중..."):
+                create_translated_presentation_v2(
+                    st.session_state.uploaded_path,
+                    output_pptx,
+                    cfg,
+                    progress_callback=append_log,
+                )
+            elapsed = int(time.time() - start)
+            st.success(f"PPT 생성 완료! 소요 시간: {elapsed//60}분 {elapsed%60}초")
+            append_log(f"PPT 번역 완료 ({elapsed//60}분 {elapsed%60}초)")
+
+            st.session_state.output_pptx_path = output_pptx
+            st.session_state.output_pptx_name = f"{base_name}_translated.pptx"
+            st.session_state.last_action = "translate_ppt"
+            st.rerun()
+
+    except Exception as e:
+        append_log(f"오류: {str(e)}")
+        st.error(f"실행 중 오류가 발생했습니다: {str(e)}")
+
 
 uploaded = st.file_uploader("PPTX 파일 업로드", type=["pptx"]) 
 if uploaded:
@@ -305,86 +358,6 @@ if uploaded:
         st.session_state.uploaded_file_meta = meta
         reset_logs()
 
-# 비밀번호 모달 처리
-if st.session_state.show_password_modal:
-    with st.form("password_form"):
-        st.subheader("🔒 번역 기능 접근")
-        st.write("번역 기능을 사용하려면 비밀번호를 입력해주세요.")
-        entered_password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
-        
-        col_submit, col_cancel = st.columns(2)
-        with col_submit:
-            submit_password = st.form_submit_button("확인", use_container_width=True)
-        with col_cancel:
-            cancel_password = st.form_submit_button("취소", use_container_width=True)
-        
-        if submit_password:
-            if check_password(entered_password):
-                st.success("비밀번호가 확인되었습니다!")
-                action_type = st.session_state.password_for
-                st.session_state.show_password_modal = False
-                st.session_state.password_for = None
-                
-                # 비밀번호 확인 후 해당 액션 실행
-                if action_type == "translate_markdown":
-                    reset_logs()
-                    append_log("Markdown 번역 준비 중...")
-                    glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
-                    if glossary:
-                        append_log(f"용어집 적용: {len(glossary)}개 항목")
-                    cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
-                    start = time.time()
-                    append_log(f"Markdown 번역 요청 전송 — 글자 수 {len(st.session_state.markdown or ''):,}자")
-                    with st.spinner("번역 중..."):
-                        st.session_state.translated_md = translate_markdown(st.session_state.markdown, cfg)
-                        st.session_state.show_translation_tab = True
-                    elapsed = int(time.time() - start)
-                    append_log(f"Markdown 번역 완료 ({elapsed//60}분 {elapsed%60}초)")
-                    st.info(f"번역 소요 시간: {elapsed//60}분 {elapsed%60}초")
-                    st.rerun()
-                    
-                elif action_type == "translate_ppt":
-                    reset_logs()
-                    append_log("PPT 번역 준비 중...")
-                    glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
-                    if glossary:
-                        append_log(f"용어집 적용: {len(glossary)}개 항목")
-                    cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
-                    
-                    # 번역된 PPT 파일명 생성
-                    base_name = os.path.splitext(st.session_state.get("uploaded_original_name") or os.path.basename(st.session_state.uploaded_path))[0]
-                    output_pptx = os.path.abspath(f"{base_name}_translated.pptx")
-                    if st.session_state.output_pptx_path and os.path.exists(st.session_state.output_pptx_path):
-                        try:
-                            os.remove(st.session_state.output_pptx_path)
-                        except OSError:
-                            pass
-                    
-                    start = time.time()
-                    slide_count = len(st.session_state.docs) if st.session_state.docs else "?"
-                    append_log(f"PPT 번역 및 생성 시작 — 대상 슬라이드 {slide_count}")
-                    with st.spinner("PPT 번역 및 생성 중..."):
-                        create_translated_presentation_v2(
-                            st.session_state.uploaded_path,
-                            output_pptx,
-                            cfg,
-                            progress_callback=append_log,
-                        )
-                    elapsed = int(time.time() - start)
-                    st.success(f"PPT 생성 완료! 소요 시간: {elapsed//60}분 {elapsed%60}초")
-                    append_log(f"PPT 번역 완료 ({elapsed//60}분 {elapsed%60}초)")
-                    
-                    # Form 밖에서 다운로드 버튼 렌더링을 위해 경로 저장 후 리런
-                    st.session_state.output_pptx_path = output_pptx
-                    st.session_state.output_pptx_name = f"{base_name}_translated.pptx"
-                    st.rerun()
-            else:
-                st.error("비밀번호가 올바르지 않습니다.")
-        
-        if cancel_password:
-            st.session_state.show_password_modal = False
-            st.session_state.password_for = None
-            st.rerun()
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -399,13 +372,11 @@ with col1:
 
 with col2:
     if st.button("번역 (Markdown)", use_container_width=True, disabled=not st.session_state.markdown):
-        show_password_modal("translate_markdown")
-        st.rerun()
+        run_action("translate_markdown")
 
 with col3:
     if st.button("번역된 PPT 생성", use_container_width=True, disabled=not st.session_state.uploaded_path):
-        show_password_modal("translate_ppt")
-        st.rerun()
+        run_action("translate_ppt")
 
 # 폼 외부에서 다운로드 버튼 렌더링
 if st.session_state.output_pptx_path and os.path.exists(st.session_state.output_pptx_path):
