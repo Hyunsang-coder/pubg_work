@@ -1,6 +1,5 @@
 from __future__ import annotations
-import os, time, json, io, uuid, hashlib, html
-from datetime import datetime
+import os, time, json, io, uuid, hashlib
 import streamlit as st
 from dotenv import load_dotenv
 import sys
@@ -20,7 +19,7 @@ if PARENT_DIR not in sys.path:
 from src.pptx2md.extract import extract_pptx_to_docs
 from src.pptx2md.markdown import docs_to_markdown
 from src.pptx2md.options import ExtractOptions
-from src.pptx2md.translate import translate_markdown, TranslationConfig
+from src.pptx2md.translate import TranslationConfig
 from src.pptx2md.ppt_generator import create_translated_presentation_v2
 
 # 용어집 파일 제한 설정
@@ -162,6 +161,46 @@ def get_glossary_from_upload(uploaded_file):
 load_dotenv()
 st.set_page_config(page_title="PPT 번역 솔루션", layout="centered")
 
+# Progress bar를 전체 영역 너비로 확장
+st.markdown(
+    """
+    <style>
+    /* Progress bar 컨테이너를 전체 너비로 설정 */
+    .stProgress {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Progress bar 자체를 전체 너비로 설정 */
+    div[data-testid="stProgress"] {
+        width: 100% !important;
+        padding: 0 !important;
+        margin-top: 0.25rem;
+    }
+    
+    /* Progress bar 내부 요소들 전체 너비로 설정 */
+    div[data-testid="stProgress"] > div {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Progress bar의 실제 바 요소 */
+    div[data-testid="stProgress"] > div > div {
+        width: 100% !important;
+    }
+    
+    /* 모든 progress 관련 요소 */
+    [data-testid="stProgress"] * {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # 헤더 로고: 파일이 존재할 때만 표시해 레이아웃을 깨뜨리지 않는다
 logo_path = os.path.join(ROOT_DIR, "assets", "ppt_logo.png")
 header_cols = st.columns([1, 8]) if os.path.exists(logo_path) else None
@@ -174,38 +213,15 @@ if header_cols:
 else:
     st.title("PPT 번역 솔루션")
 
-if "translation_logs" not in st.session_state:
-    st.session_state.translation_logs = []
-if "log_placeholder" not in st.session_state:
-    st.session_state.log_placeholder = None
+if "last_status" not in st.session_state:
+    st.session_state.last_status = None
 
 
-def _render_logs():
-    placeholder = st.session_state.get("log_placeholder")
-    if placeholder is None:
+def _set_status(kind: str | None, message: str | None = None) -> None:
+    if kind is None:
+        st.session_state.last_status = None
         return
-
-    if st.session_state.translation_logs:
-        content = "<br/>".join(html.escape(msg) for msg in st.session_state.translation_logs)
-        html_block = (
-            "<div style='max-height:320px; overflow-y:auto; background-color:#0f1116; "
-            "padding:12px; border-radius:8px; font-family:monospace; font-size:13px;'>"
-            f"{content}</div>"
-        )
-        placeholder.markdown(html_block, unsafe_allow_html=True)
-    else:
-        placeholder.markdown("_진행 로그가 여기에 표시됩니다._")
-
-
-def append_log(message: str):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    st.session_state.translation_logs.append(f"[{timestamp}] {message}")
-    _render_logs()
-
-
-def reset_logs():
-    st.session_state.translation_logs = []
-    _render_logs()
+    st.session_state.last_status = {"type": kind, "message": message or ""}
 
 with st.sidebar:
     st.header("기능 선택")
@@ -239,22 +255,16 @@ with st.sidebar:
         charts_map = {"레이블": "labels", "플레이스홀더": "placeholder", "생략": "omit"}
         charts = charts_map[charts_display]
         
-        # 기본값 설정 (번역 페이지에서 사용할 때)
-        model = "gpt-4o-mini"
-        default_prompt = """당신은 시니어 번역사입니다. PPT 번역 시:
-- 원문 의미 유지하되 간결하게 번역
-- 번역문이 원문보다 20% 이상 길어지지 않게 제한
-- 자연스럽고 비즈니스에 적합한 표현 사용"""
-        extra_prompt = default_prompt
-        glossary_file = None
+        # (텍스트 추출 페이지에서는 번역 관련 입력을 사용하지 않음)
         
     elif current_page == "translate":
         st.subheader("번역 옵션")
         model = st.selectbox("OpenAI 모델", ["gpt-5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini", "gpt-5-nano"], index=3)
-        default_prompt = """당신은 시니어 번역사입니다. PPT 번역 시:
-- 원문 의미 유지하되 간결하게 번역
-- 번역문이 원문보다 20% 이상 길어지지 않게 제한
-- 자연스럽고 비즈니스에 적합한 표현 사용"""
+        default_prompt = """당신은 PUBG Studios의 시니어 번역사입니다. PPT 번역 시:
+- 원문이 영문면 국문으로, 국문이면 영문으로 번역
+- 원문 의미 유지하되, 간결하고 명료하게 번역
+ -> 원문 길이보다 20% 이상 길어지지 않도록
+- 개발/마케팅 실무자가 보기에 자연스러운 표현 사용"""
         
         extra_prompt = st.text_area("번역 프롬프트", value=default_prompt, height=150, placeholder="톤, 스타일, 용어 규칙 등...")
         
@@ -294,7 +304,7 @@ with st.sidebar:
         figures = "placeholder"
         charts = "labels"
 
-for k in ["uploaded_path", "docs", "markdown", "translated_md", "show_translation_tab", "output_pptx_path", "output_pptx_name"]:
+for k in ["uploaded_path", "docs", "markdown", "output_pptx_path", "output_pptx_name"]:
     if k not in st.session_state:
         st.session_state[k] = None
 
@@ -305,37 +315,43 @@ if "current_page" not in st.session_state:
     st.session_state.current_page = "extract"
 
 
-def run_action(action_type: str):
+def run_action(action_type: str, *, progress_slot=None):
     """공통 액션 실행 함수"""
+    progress_label = progress_bar = None
     try:
-        if action_type == "translate_markdown":
-            reset_logs()
-            append_log("Markdown 번역 준비 중...")
+        _set_status(None)
+        if progress_slot is not None:
+            progress_container = progress_slot.container()
+            progress_label = progress_container.empty()
+            progress_bar = progress_container.progress(0)
+
+        def _set_progress(percent: float, message: str | None = None) -> None:
+            if progress_bar is None:
+                return
+            pct = int(max(0.0, min(100.0, percent)))
+            progress_bar.progress(pct)
+            if progress_label is not None:
+                if message:
+                    progress_label.markdown(f"**{message}**")
+                else:
+                    progress_label.empty()
+
+        _set_progress(0, "준비 중...")
+
+        if action_type == "translate_ppt":
             glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
-            if glossary:
-                append_log(f"용어집 적용: {len(glossary)}개 항목")
-            cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
+            _set_progress(10, "용어집 적용 중...")
 
-            start = time.time()
-            append_log(f"Markdown 번역 요청 전송 — 글자 수 {len(st.session_state.markdown or ''):,}자")
-            with st.spinner("번역 중..."):
-                st.session_state.translated_md = translate_markdown(st.session_state.markdown, cfg)
-                st.session_state.show_translation_tab = True
-            elapsed = int(time.time() - start)
-            append_log(f"Markdown 번역 완료 ({elapsed//60}분 {elapsed%60}초)")
-            st.info(f"번역 소요 시간: {elapsed//60}분 {elapsed%60}초")
-            st.session_state.last_action = "translate_markdown"
-            st.rerun()
+            cfg = TranslationConfig(
+                target_lang="auto",
+                glossary=glossary,
+                extra_instructions=extra_prompt,
+                model=model,
+            )
 
-        elif action_type == "translate_ppt":
-            reset_logs()
-            append_log("PPT 번역 준비 중...")
-            glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
-            if glossary:
-                append_log(f"용어집 적용: {len(glossary)}개 항목")
-            cfg = TranslationConfig(target_lang="en", glossary=glossary, extra_instructions=extra_prompt, model=model)
-
-            base_name = os.path.splitext(st.session_state.get("uploaded_original_name") or os.path.basename(st.session_state.uploaded_path))[0]
+            base_name = os.path.splitext(
+                st.session_state.get("uploaded_original_name") or os.path.basename(st.session_state.uploaded_path)
+            )[0]
             output_pptx = os.path.abspath(f"{base_name}_translated.pptx")
             if st.session_state.output_pptx_path and os.path.exists(st.session_state.output_pptx_path):
                 try:
@@ -344,27 +360,32 @@ def run_action(action_type: str):
                     pass
 
             start = time.time()
-            slide_count = len(st.session_state.docs) if st.session_state.docs else "?"
-            append_log(f"PPT 번역 및 생성 시작 — 대상 슬라이드 {slide_count}")
-            with st.spinner("PPT 번역 및 생성 중..."):
-                create_translated_presentation_v2(
-                    st.session_state.uploaded_path,
-                    output_pptx,
-                    cfg,
-                    progress_callback=append_log,
-                )
+
+            def _on_progress(payload: dict[str, float | str]) -> None:
+                ratio = float(payload.get("ratio", 0.0)) if payload else 0.0
+                message = str(payload.get("message", "진행 중..."))
+                _set_progress(ratio * 100, message)
+
+            create_translated_presentation_v2(
+                st.session_state.uploaded_path,
+                output_pptx,
+                cfg,
+                progress_callback=_on_progress,
+            )
+
             elapsed = int(time.time() - start)
-            st.success(f"PPT 생성 완료! 소요 시간: {elapsed//60}분 {elapsed%60}초")
-            append_log(f"PPT 번역 완료 ({elapsed//60}분 {elapsed%60}초)")
+            _set_progress(100, "PPT 번역 완료")
 
             st.session_state.output_pptx_path = output_pptx
             st.session_state.output_pptx_name = f"{base_name}_translated.pptx"
             st.session_state.last_action = "translate_ppt"
+            _set_status("success", f"번역된 PPT 생성 완료 (소요 {elapsed//60}분 {elapsed%60}초)")
             st.rerun()
 
     except Exception as e:
-        append_log(f"오류: {str(e)}")
-        st.error(f"실행 중 오류가 발생했습니다: {str(e)}")
+        if progress_slot:
+            progress_slot.empty()
+        _set_status("error", f"실패: {str(e)}")
 
 
 # 현재 페이지에 따른 메인 컨텐츠 표시
@@ -400,26 +421,31 @@ if current_page == "extract":
             st.session_state.uploaded_original_name = uploaded.name
             st.session_state.docs = None
             st.session_state.markdown = None
-            st.session_state.translated_md = None
             st.session_state.output_pptx_path = None
             st.session_state.output_pptx_name = None
             st.session_state.uploaded_file_meta = meta
-            reset_logs()
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Markdown 변환", use_container_width=True, disabled=not st.session_state.uploaded_path):
-            reset_logs()
-            append_log("슬라이드에서 텍스트 추출 시작")
-            opts = ExtractOptions(with_notes=with_notes, figures=figures, charts=charts)
-            docs = extract_pptx_to_docs(st.session_state.uploaded_path, opts)
-            st.session_state.docs = docs
-            st.session_state.markdown = docs_to_markdown(docs, opts)
-            append_log(f"Markdown 생성 완료 — 슬라이드 {len(docs)}개")
+    extract_clicked = st.button("Markdown 변환", use_container_width=True, disabled=not st.session_state.uploaded_path)
+    extract_progress_slot = st.empty()
+    if extract_clicked:
+        _set_status(None)
+        progress_container = extract_progress_slot.container()
+        status_placeholder = progress_container.empty()
+        progress_bar = progress_container.progress(0)
 
-    with col2:
-        if st.button("번역 (Markdown)", use_container_width=True, disabled=not st.session_state.markdown):
-            run_action("translate_markdown")
+        status_placeholder.markdown("**슬라이드 분석 중...**")
+        progress_bar.progress(10)
+        opts = ExtractOptions(with_notes=with_notes, figures=figures, charts=charts)
+        docs = extract_pptx_to_docs(st.session_state.uploaded_path, opts)
+
+        status_placeholder.markdown("**Markdown 생성 중...**")
+        progress_bar.progress(60)
+        st.session_state.docs = docs
+        st.session_state.markdown = docs_to_markdown(docs, opts)
+
+        status_placeholder.markdown("**Markdown 변환 완료**")
+        progress_bar.progress(100)
+        _set_status("success", f"Markdown 변환 완료 (슬라이드 {len(docs)}개)")
 
 elif current_page == "translate":
     st.header("🌐 번역된 PPT 생성")
@@ -451,34 +477,26 @@ elif current_page == "translate":
             st.session_state.uploaded_original_name = uploaded.name
             st.session_state.docs = None
             st.session_state.markdown = None
-            st.session_state.translated_md = None
             st.session_state.output_pptx_path = None
             st.session_state.output_pptx_name = None
             st.session_state.uploaded_file_meta = meta
-            reset_logs()
 
-    if st.button("번역된 PPT 생성", use_container_width=True, disabled=not st.session_state.uploaded_path):
-        run_action("translate_ppt")
+    generate_clicked = st.button("번역된 PPT 생성", use_container_width=True, disabled=not st.session_state.uploaded_path)
+    ppt_progress_slot = st.empty()
+    if generate_clicked:
+        run_action("translate_ppt", progress_slot=ppt_progress_slot)
 
 # 페이지별 결과 표시
 if current_page == "extract":
     # 텍스트 추출 페이지의 미리보기
     if st.session_state.markdown:
         st.divider()
-        # Auto-switch to translation tab if translation exists
-        default_tab = 1 if st.session_state.translated_md else 0
-        tab1, tab2 = st.tabs(["Markdown 미리보기", "번역본 미리보기"])
-        
-        with tab1:
-            st.code(st.session_state.markdown, language="markdown", height=400)
-            st.download_button("Markdown 다운로드", st.session_state.markdown.encode("utf-8"), 
-                              os.path.splitext(os.path.basename(st.session_state.uploaded_path))[0] + ".md")
-        
-        with tab2:
-            if st.session_state.translated_md:
-                st.code(st.session_state.translated_md, language="markdown", height=400)
-            else:
-                st.info("번역을 먼저 실행해주세요.")
+        st.code(st.session_state.markdown, language="markdown", height=400)
+        st.download_button(
+            "Markdown 다운로드",
+            st.session_state.markdown.encode("utf-8"),
+            os.path.splitext(os.path.basename(st.session_state.uploaded_path))[0] + ".md",
+        )
 
 elif current_page == "translate":
     # PPT 번역 페이지의 다운로드 버튼
@@ -492,10 +510,12 @@ elif current_page == "translate":
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
             )
 
-# 공통 진행 로그 (모든 페이지에서 표시)
-st.divider()
-with st.container():
-    st.subheader("진행 로그")
-    st.caption("로그가 길어지면 스크롤하여 확인하세요.")
-    st.session_state.log_placeholder = st.empty()
-    _render_logs()
+status = st.session_state.get("last_status")
+if status:
+    st.divider()
+    if status["type"] == "success":
+        st.success(status["message"])
+    elif status["type"] == "error":
+        st.error(status["message"])
+    else:
+        st.info(status["message"])

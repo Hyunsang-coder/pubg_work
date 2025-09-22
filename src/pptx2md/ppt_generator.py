@@ -184,33 +184,40 @@ def create_translated_presentation_v2(
                 paragraph_infos.append(para_info)
                 texts_to_translate.append(full_paragraph_text)
     
-    def _log(message: str) -> None:
+    def _log(message: str, *, ratio: float | None = None) -> None:
         if progress_callback:
+            payload = {"message": message}
+            if ratio is not None:
+                payload["ratio"] = max(0.0, min(1.0, ratio))
             try:
-                progress_callback(message)
+                progress_callback(payload)
             except Exception:
                 pass
 
     # 4. 일괄 번역
     if not texts_to_translate:
         # 번역할 텍스트가 없으면 원본 복사
-        _log("번역할 문장이 없어 원본 PPT를 그대로 저장합니다.")
+        _log("번역할 문장이 없어 원본 PPT를 그대로 저장합니다.", ratio=1.0)
         prs.save(output_pptx)
         return
 
     total = len(texts_to_translate)
-    _log(f"슬라이드 분석 완료: 총 {total}개 문장")
+    _log(f"슬라이드 분석 완료: 총 {total}개 문장", ratio=0.05)
     translated_texts: List[str] = []
     safe_batch_size = max(1, batch_size)
+    progress_base = 0.1
+    progress_span = 0.7
 
     for start in range(0, total, safe_batch_size):
         end = min(start + safe_batch_size, total)
         batch = texts_to_translate[start:end]
-        _log(f"번역 진행 중 ({start + 1}~{end}/{total})")
+        completed = end
+        ratio = progress_base + progress_span * (completed / total)
+        _log(f"번역 진행 중 ({start + 1}~{end}/{total})", ratio=ratio)
         translated_batch = translate_texts(batch, config)
         translated_texts.extend(translated_batch)
 
-    _log("번역된 문장을 PPT에 반영 중...")
+    _log("번역된 문장을 PPT에 반영 중...", ratio=0.9)
     
     # 5. 번역된 텍스트 재삽입
     for para_info, translated_text in zip(paragraph_infos, translated_texts):
@@ -236,7 +243,7 @@ def create_translated_presentation_v2(
         except Exception:
             # 개별 단락 처리 실패 시 무시하고 계속 진행
             continue
-    _log("번역 결과 저장 완료")
+    _log("번역 결과 저장 완료", ratio=1.0)
     # 6. 프레젠테이션 저장
     prs.save(output_pptx)
 

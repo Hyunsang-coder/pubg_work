@@ -34,9 +34,14 @@ def translate_texts(texts: List[str], config: TranslationConfig) -> List[str]:
     if not texts:
         return []
     client = _get_openai_client()
+    # 양방향 번역을 위한 개선된 프롬프트
+    if config.target_lang == "auto":
+        translate_instruction = "Translate each item: Korean to English, English to Korean"
+    else:
+        translate_instruction = f"Translate each item to {config.target_lang}"
+    
     prompt = (
-        "Translate each item in the provided JSON list to "
-        f"{config.target_lang}. Keep numbers/dates/URLs/code unchanged. "
+        f"{translate_instruction}. Keep numbers/dates/URLs/code unchanged. "
         "Return ONLY a valid JSON object like `{\"result\": [\"...\", \"...\"]}` with the same length/order.\n"
         f"Glossary(JSON): {json.dumps(config.glossary or {}, ensure_ascii=False)}\n"
         f"Extra Instructions: {config.extra_instructions or 'None'}\n"
@@ -65,9 +70,15 @@ def translate_markdown(md_text: str, config: TranslationConfig) -> str:
     client = _get_openai_client()
     glossary_text = json.dumps(config.glossary, ensure_ascii=False) if config.glossary else "{}"
     extra_text = f"Extra instructions: {config.extra_instructions}\n" if config.extra_instructions else ""
+    # 양방향 번역을 위한 개선된 프롬프트
+    if config.target_lang == "auto":
+        translate_instruction = "Translate the following Markdown: Korean to English, English to Korean"
+    else:
+        translate_instruction = f"Translate the following Markdown into {config.target_lang}"
+    
     prompt = (
-        "You are a professional translator. Translate the following Markdown into "
-        f"{config.target_lang}. Keep structure and punctuation. Do not change numbers, dates, URLs, or code blocks.\n"
+        f"You are a professional translator. {translate_instruction}. "
+        "Keep structure and punctuation. Do not change numbers, dates, URLs, or code blocks.\n"
         "Use the glossary strictly when applicable; do-not-translate terms must stay as-is.\n"
         f"{extra_text}"
         f"Glossary(JSON): {glossary_text}\n\nSOURCE:\n```md\n{md_text}\n```"
