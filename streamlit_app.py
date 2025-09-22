@@ -379,7 +379,22 @@ def run_action(action_type: str, *, progress_slot=None):
             st.session_state.output_pptx_path = output_pptx
             st.session_state.output_pptx_name = f"{base_name}_translated.pptx"
             st.session_state.last_action = "translate_ppt"
-            _set_status("success", f"번역된 PPT 생성 완료 (소요 {elapsed//60}분 {elapsed%60}초)")
+            # 상세 로그 메시지
+            try:
+                output_size_mb = os.path.getsize(output_pptx) / (1024 * 1024)
+                input_size_mb = os.path.getsize(st.session_state.uploaded_path) / (1024 * 1024) if st.session_state.uploaded_path else 0
+                glossary_count = len(glossary) if isinstance(glossary, dict) else 0
+                glossary_part = f"용어집 {glossary_count}항목 적용" if glossary_count > 0 else "용어집 없음"
+                prompt_len = len(extra_prompt or "") if 'extra_prompt' in locals() else 0
+                model_name = model if 'model' in locals() else getattr(cfg, 'model', 'unknown')
+                msg = (
+                    f"PPT 번역 완료 — 모델 {model_name}, {glossary_part}, "
+                    f"소요 {elapsed//60}분 {elapsed%60}초, 출력 '{st.session_state.output_pptx_name}'({output_size_mb:.1f}MB), "
+                    f"입력 {input_size_mb:.1f}MB, 프롬프트 {prompt_len:,}자"
+                )
+            except Exception:
+                msg = f"PPT 번역 완료 (소요 {elapsed//60}분 {elapsed%60}초)"
+            _set_status("success", msg)
             st.rerun()
 
     except Exception as e:
@@ -445,7 +460,23 @@ if current_page == "extract":
 
         status_placeholder.markdown("**Markdown 변환 완료**")
         progress_bar.progress(100)
-        _set_status("success", f"Markdown 변환 완료 (슬라이드 {len(docs)}개)")
+        # 상세 로그 메시지
+        try:
+            md_text = st.session_state.markdown or ""
+            md_len = len(md_text)
+            md_lines = (md_text.count("\n") + 1) if md_text else 0
+            meta = st.session_state.get("uploaded_file_meta", {}) or {}
+            src_name = meta.get("name") or (os.path.basename(st.session_state.uploaded_path) if st.session_state.uploaded_path else "")
+            src_size_mb = (meta.get("size", 0) / (1024 * 1024)) if meta else (os.path.getsize(st.session_state.uploaded_path) / (1024 * 1024) if st.session_state.uploaded_path else 0)
+            notes_label = "포함" if with_notes else "미포함"
+            msg = (
+                f"Markdown 변환 완료 — 슬라이드 {len(docs)}개, "
+                f"옵션: 노트 {notes_label} / 그림 {figures_display} / 차트 {charts_display}, "
+                f"MD {md_len:,}자·{md_lines:,}라인, 원본 '{src_name}'({src_size_mb:.1f}MB)"
+            )
+        except Exception:
+            msg = f"Markdown 변환 완료 (슬라이드 {len(docs)}개)"
+        _set_status("success", msg)
 
 elif current_page == "translate":
     st.header("🌐 번역된 PPT 생성")
