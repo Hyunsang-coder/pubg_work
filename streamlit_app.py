@@ -366,7 +366,7 @@ def run_action(action_type: str, *, progress_slot=None):
                 message = str(payload.get("message", "진행 중..."))
                 _set_progress(ratio * 100, message)
 
-            create_translated_presentation_v2(
+            stats = create_translated_presentation_v2(
                 st.session_state.uploaded_path,
                 output_pptx,
                 cfg,
@@ -385,13 +385,23 @@ def run_action(action_type: str, *, progress_slot=None):
                 input_size_mb = os.path.getsize(st.session_state.uploaded_path) / (1024 * 1024) if st.session_state.uploaded_path else 0
                 glossary_count = len(glossary) if isinstance(glossary, dict) else 0
                 glossary_part = f"용어집 {glossary_count}항목 적용" if glossary_count > 0 else "용어집 없음"
-                prompt_len = len(extra_prompt or "") if 'extra_prompt' in locals() else 0
                 model_name = model if 'model' in locals() else getattr(cfg, 'model', 'unknown')
-                msg = (
-                    f"PPT 번역 완료 — 모델 {model_name}, {glossary_part}, "
-                    f"소요 {elapsed//60}분 {elapsed%60}초, 출력 '{st.session_state.output_pptx_name}'({output_size_mb:.1f}MB), "
-                    f"입력 {input_size_mb:.1f}MB, 프롬프트 {prompt_len:,}자"
+                stats = stats or {}
+                stats_details = []
+                slide_count = stats.get("slides") if isinstance(stats, dict) else None
+                word_count = stats.get("word_count") if isinstance(stats, dict) else None
+                if isinstance(slide_count, int):
+                    stats_details.append(f"슬라이드 {slide_count}개")
+                if isinstance(word_count, int):
+                    stats_details.append(f"번역 단어 {word_count:,}개")
+                summary_parts = [f"모델 {model_name}", glossary_part]
+                summary_parts.extend(stats_details)
+                summary_parts.append(f"소요 {elapsed//60}분 {elapsed%60}초")
+                summary_parts.append(
+                    f"출력 '{st.session_state.output_pptx_name}'({output_size_mb:.1f}MB)"
                 )
+                summary_parts.append(f"입력 {input_size_mb:.1f}MB")
+                msg = "PPT 번역 완료 — " + ", ".join(summary_parts)
             except Exception:
                 msg = f"PPT 번역 완료 (소요 {elapsed//60}분 {elapsed%60}초)"
             _set_status("success", msg)

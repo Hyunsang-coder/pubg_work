@@ -107,7 +107,7 @@ def create_translated_presentation_v2(
     *,
     progress_callback: Optional[Callable[[str], None]] = None,
     batch_size: int = 200,
-) -> None:
+) -> Dict[str, int]:
     """
     하이브리드 접근 방식으로 프레젠테이션을 번역하는 함수
     
@@ -115,9 +115,13 @@ def create_translated_presentation_v2(
         input_pptx: 입력 PPTX 파일 경로
         output_pptx: 출력 PPTX 파일 경로
         config: 번역 설정
+
+    Returns:
+        dict: 번역된 프레젠테이션의 통계 정보 (슬라이드 수, 번역 단어 수)
     """
     # 1. 프레젠테이션 로드
     prs = Presentation(input_pptx)
+    slide_count = len(prs.slides)
     
     # 2. 모든 단락 정보 수집
     paragraph_infos: List[ParagraphInfo] = []
@@ -195,11 +199,13 @@ def create_translated_presentation_v2(
                 pass
 
     # 4. 일괄 번역
+    word_count_source = sum(len(text.split()) for text in texts_to_translate)
+
     if not texts_to_translate:
         # 번역할 텍스트가 없으면 원본 복사
         _log("번역할 문장이 없어 원본 PPT를 그대로 저장합니다.", ratio=1.0)
         prs.save(output_pptx)
-        return
+        return {"slides": slide_count, "word_count": 0}
 
     total = len(texts_to_translate)
     _log(f"슬라이드 분석 완료: 총 {total}개 문장", ratio=0.05)
@@ -243,9 +249,12 @@ def create_translated_presentation_v2(
         except Exception:
             # 개별 단락 처리 실패 시 무시하고 계속 진행
             continue
+    translated_word_count = sum(len(text.split()) for text in translated_texts) if translated_texts else word_count_source
+
     _log("번역 결과 저장 완료", ratio=1.0)
     # 6. 프레젠테이션 저장
     prs.save(output_pptx)
+    return {"slides": slide_count, "word_count": translated_word_count}
 
 
 # 레거시 호환성을 위한 래퍼 (사용하지 않음)
