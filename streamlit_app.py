@@ -260,11 +260,11 @@ with st.sidebar:
     elif current_page == "translate":
         st.subheader("번역 옵션")
         model = st.selectbox("OpenAI 모델", ["gpt-5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini", "gpt-5-nano"], index=3)
-        default_prompt = """당신은 PUBG Studios의 시니어 번역사입니다. PPT 번역 시:
-- 원문이 영문면 국문으로, 국문이면 영문으로 번역
-- 원문 의미 유지하되, 간결하고 명료하게 번역
- -> 원문 길이보다 20% 이상 길어지지 않도록
-- 개발/마케팅 실무자가 보기에 자연스러운 표현 사용"""
+        default_prompt = """1. 슬라이드 주 언어(KR·EN) 판별 후 반대 언어로 번역.
+2. 이미 목표 언어로 된 문장/용어는 그대로 두거나 자연스럽게 다듬기만.
+3. 의미 유지 + 간결·명료, 길이는 원문 120 % 이내.
+4. 용어집 우선, 고유명사는 원형 유지.
+5. 개발·마케팅 실무자가 읽기 쉬운 자연스러운 표현 사용."""
         
         extra_prompt = st.text_area("번역 프롬프트", value=default_prompt, height=150, placeholder="톤, 스타일, 용어 규칙 등...")
         
