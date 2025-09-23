@@ -214,13 +214,19 @@ def create_translated_presentation_v2(
     progress_base = 0.1
     progress_span = 0.7
 
+    total_batches = (total + safe_batch_size - 1) // safe_batch_size if total else 0
+
     for start in range(0, total, safe_batch_size):
         end = min(start + safe_batch_size, total)
         batch = texts_to_translate[start:end]
         completed = end
         ratio = progress_base + progress_span * (completed / total)
-        _log(f"번역 진행 중 ({start + 1}~{end}/{total})", ratio=ratio)
+        current_batch = (start // safe_batch_size) + 1
+        batch_caption = f"배치 {current_batch}/{total_batches}" if total_batches else "배치 진행"
+        pre_ratio = max(progress_base, ratio - 0.02)
+        _log(f"번역 요청 준비 — {batch_caption} ({start + 1}~{end}/{total})", ratio=pre_ratio)
         translated_batch = translate_texts(batch, config)
+        _log(f"모델 응답 수신 — {batch_caption} ({start + 1}~{end}/{total})", ratio=ratio)
         translated_texts.extend(translated_batch)
 
     _log("번역된 문장을 PPT에 반영 중...", ratio=0.9)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os, time, json, io, uuid, hashlib
+from contextlib import nullcontext
 import streamlit as st
 from dotenv import load_dotenv
 import sys
@@ -408,12 +409,14 @@ def run_action(action_type: str, *, progress_slot=None):
                 message = str(payload.get("message", "진행 중..."))
                 _set_progress(ratio * 100, message)
 
-            stats = create_translated_presentation_v2(
-                st.session_state.uploaded_path,
-                output_pptx,
-                cfg,
-                progress_callback=_on_progress,
-            )
+            spinner_cm = st.spinner("OpenAI 번역 처리 중...") if progress_slot is not None else nullcontext()
+            with spinner_cm:
+                stats = create_translated_presentation_v2(
+                    st.session_state.uploaded_path,
+                    output_pptx,
+                    cfg,
+                    progress_callback=_on_progress,
+                )
 
             elapsed = int(time.time() - start)
             _set_progress(100, "PPT 번역 완료")
