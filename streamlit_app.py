@@ -259,9 +259,50 @@ with st.sidebar:
         
     elif current_page == "translate":
         st.subheader("번역 옵션")
-        model = st.selectbox("OpenAI 모델", ["gpt-5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini", "gpt-5-nano"], index=3)
-        default_prompt = """1. 슬라이드 주 언어(KR·EN) 판별 후 반대 언어로 번역.
-2. 이미 목표 언어로 된 문장/용어는 그대로 두거나 자연스럽게 다듬기만.
+        language_choices = [
+            ("자동 감지", "auto"),
+            ("한국어", "ko"),
+            ("영어", "en"),
+            ("일본어", "ja"),
+            ("중국어", "zh"),
+        ]
+        language_map = {label: code for label, code in language_choices}
+        source_labels = [label for label, _ in language_choices]
+        target_labels = [label for label, code in language_choices if code != "auto"]
+
+        default_source_code = st.session_state.get("source_lang", "auto")
+        default_target_code = st.session_state.get("target_lang", "en")
+
+        source_index = next((idx for idx, (_, code) in enumerate(language_choices) if code == default_source_code), 0)
+        target_index = next((idx for idx, label in enumerate(target_labels) if language_map[label] == default_target_code), 1 if "영어" in target_labels else 0)
+
+        source_lang_label = st.selectbox("소스 언어", source_labels, index=source_index)
+        target_lang_label = st.selectbox("타겟 언어", target_labels, index=target_index)
+
+        source_lang = language_map[source_lang_label]
+        target_lang = language_map[target_lang_label]
+        language_pair_display = f"{source_lang_label}→{target_lang_label}"
+
+        st.session_state.source_lang = source_lang
+        st.session_state.target_lang = target_lang
+        st.session_state.language_pair_display = language_pair_display
+
+        if source_lang == "auto":
+            rule_one = f"문장별 언어를 판별하여 {target_lang_label}로 번역."
+        elif source_lang == target_lang:
+            rule_one = f"{target_lang_label} 문장은 의미를 유지하며 자연스럽게 다듬기."
+        else:
+            rule_one = f"{source_lang_label} 원문을 {target_lang_label}로 번역."
+
+        model_options = ["gpt-4o", "gpt-4.1", "gpt-5"]
+        default_model = st.session_state.get("selected_model", model_options[2])
+        if default_model not in model_options:
+            default_model = model_options[0]
+        model_index = model_options.index(default_model)
+        model = st.selectbox("OpenAI 모델", model_options, index=model_index)
+        st.session_state.selected_model = model
+        default_prompt = f"""1. {rule_one}
+2. 이미 {target_lang_label}로 된 문장/용어는 그대로 두거나 자연스럽게 다듬기만.
 3. 의미 유지 + 간결·명료, 길이는 원문 120 % 이내.
 4. 용어집 우선, 고유명사는 원형 유지.
 5. 개발·마케팅 실무자가 읽기 쉬운 자연스러운 표현 사용."""
@@ -343,7 +384,8 @@ def run_action(action_type: str, *, progress_slot=None):
             _set_progress(10, "용어집 적용 중...")
 
             cfg = TranslationConfig(
-                target_lang="auto",
+                source_lang=st.session_state.get("source_lang", "auto"),
+                target_lang=st.session_state.get("target_lang", "en"),
                 glossary=glossary,
                 extra_instructions=extra_prompt,
                 model=model,
@@ -395,6 +437,9 @@ def run_action(action_type: str, *, progress_slot=None):
                 if isinstance(word_count, int):
                     stats_details.append(f"번역 단어 {word_count:,}개")
                 summary_parts = [f"모델 {model_name}", glossary_part]
+                language_pair = st.session_state.get("language_pair_display")
+                if language_pair:
+                    summary_parts.append(f"언어 {language_pair}")
                 summary_parts.extend(stats_details)
                 summary_parts.append(f"소요 {elapsed//60}분 {elapsed%60}초")
                 summary_parts.append(

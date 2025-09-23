@@ -106,7 +106,7 @@ def create_translated_presentation_v2(
     config: TranslationConfig,
     *,
     progress_callback: Optional[Callable[[str], None]] = None,
-    batch_size: int = 200,
+    batch_size: int = 400,
 ) -> Dict[str, int]:
     """
     하이브리드 접근 방식으로 프레젠테이션을 번역하는 함수
