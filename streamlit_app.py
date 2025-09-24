@@ -29,6 +29,8 @@ MAX_FILE_SIZE_MB = 5        # 최대 파일 크기 (MB)
 MAX_TERM_LENGTH = 100       # 개별 용어 최대 길이
 TMP_DIR = os.path.join(ROOT_DIR, "tmp")
 os.makedirs(TMP_DIR, exist_ok=True)
+OUTPUT_DIR = os.path.join(ROOT_DIR, "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _load_glossary_from_bytes(file_name: str, file_bytes: bytes) -> dict | None:
     """바이트 데이터를 기반으로 용어집을 파싱합니다."""
@@ -248,12 +250,12 @@ with st.sidebar:
         st.subheader("텍스트 추출 옵션")
         with_notes = st.checkbox("발표자 노트 포함", value=False)
         # UI에서는 한국어로 표시하되 실제 값은 영어로 매핑
-        figures_display = st.selectbox("그림 처리", ["플레이스홀더", "생략"], index=0)
+        figures_display = st.selectbox("그림 처리", ["플레이스홀더", "생략"], index=1)
         figures_map = {"플레이스홀더": "placeholder", "생략": "omit"}
         figures = figures_map[figures_display]
         
-        charts_display = st.selectbox("차트 처리", ["레이블", "플레이스홀더", "생략"], index=0)
-        charts_map = {"레이블": "labels", "플레이스홀더": "placeholder", "생략": "omit"}
+        charts_display = st.selectbox("차트 처리", ["제목만", "플레이스홀더", "생략"], index=0)
+        charts_map = {"제목만": "labels", "플레이스홀더": "placeholder", "생략": "omit"}
         charts = charts_map[charts_display]
         
         # (텍스트 추출 페이지에서는 번역 관련 입력을 사용하지 않음)
@@ -295,7 +297,7 @@ with st.sidebar:
         else:
             rule_one = f"{source_lang_label} 원문을 {target_lang_label}로 번역."
 
-        model_options = ["gpt-4o", "gpt-4.1", "gpt-5"]
+        model_options = ["gpt-4o-mini", "gpt-4.1", "gpt-5"]
         default_model = st.session_state.get("selected_model", model_options[2])
         if default_model not in model_options:
             default_model = model_options[0]
@@ -392,10 +394,13 @@ def run_action(action_type: str, *, progress_slot=None):
                 model=model,
             )
 
-            base_name = os.path.splitext(
-                st.session_state.get("uploaded_original_name") or os.path.basename(st.session_state.uploaded_path)
-            )[0]
-            output_pptx = os.path.abspath(f"{base_name}_translated.pptx")
+            original_name = st.session_state.get("uploaded_original_name") or os.path.basename(st.session_state.uploaded_path)
+            base_name, base_ext = os.path.splitext(original_name)
+            file_ext = base_ext if base_ext else ".pptx"
+            lang_code = st.session_state.get("target_lang", "en")
+            lang_tag = {"ko": "KR", "en": "EN", "ja": "JA", "zh": "ZH"}.get(lang_code, str(lang_code).upper())
+            file_name = f"Trans_{lang_tag}_{base_name}{file_ext}"
+            output_pptx = os.path.abspath(os.path.join(OUTPUT_DIR, file_name))
             if st.session_state.output_pptx_path and os.path.exists(st.session_state.output_pptx_path):
                 try:
                     os.remove(st.session_state.output_pptx_path)
@@ -422,7 +427,7 @@ def run_action(action_type: str, *, progress_slot=None):
             _set_progress(100, "PPT 번역 완료")
 
             st.session_state.output_pptx_path = output_pptx
-            st.session_state.output_pptx_name = f"{base_name}_translated.pptx"
+            st.session_state.output_pptx_name = file_name
             st.session_state.last_action = "translate_ppt"
             # 상세 로그 메시지
             try:

@@ -157,7 +157,9 @@ def translate_texts(texts: List[str], config: TranslationConfig) -> List[str]:
     raise RuntimeError("번역 응답 파싱에 실패했습니다.")
 
 
-def translate_markdown(md_text: str, config: TranslationConfig) -> str:
+
+#deprecated
+#def translate_markdown(md_text: str, config: TranslationConfig) -> str:
     client = _get_openai_client()
     glossary_text = json.dumps(config.glossary, ensure_ascii=False) if config.glossary else "{}"
     extra_text = f"Extra instructions: {config.extra_instructions}\n" if config.extra_instructions else ""
