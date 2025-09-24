@@ -160,7 +160,7 @@ def get_glossary_from_upload(uploaded_file):
         st.session_state.pop("cached_glossary_meta", None)
     return glossary
 
-st.set_page_config(page_title="PPT 번역 솔루션", layout="centered")
+st.set_page_config(page_title="PPT 번역캣", layout="centered")
 
 # Progress bar를 전체 영역 너비로 확장
 st.markdown(
@@ -210,9 +210,9 @@ if header_cols:
     with header_cols[0]:
         st.image(logo_path, width=80)
     with header_cols[1]:
-        st.title("PPT 번역 솔루션")
+        st.title("PPT 번역캣")
 else:
-    st.title("PPT 번역 솔루션")
+    st.title("PPT 번역캣")
 
 if "last_status" not in st.session_state:
     st.session_state.last_status = None
