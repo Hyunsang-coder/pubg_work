@@ -158,49 +158,7 @@ def translate_texts(texts: List[str], config: TranslationConfig) -> List[str]:
 
 
 
-#deprecated
-#def translate_markdown(md_text: str, config: TranslationConfig) -> str:
-    client = _get_openai_client()
-    glossary_text = json.dumps(config.glossary, ensure_ascii=False) if config.glossary else "{}"
-    extra_text = f"Extra instructions: {config.extra_instructions}\n" if config.extra_instructions else ""
-    target_code = (config.target_lang or "en").lower()
-    if target_code == "auto":
-        target_name = "Auto (opposite language)"
-    else:
-        target_name = _language_name(target_code) or target_code
-
-    source_code = (config.source_lang or "auto").lower()
-    source_hint = ""
-
-    if source_code == target_code and target_code != "auto":
-        translate_instruction = f"Polish the following Markdown in {target_name}, improving clarity while preserving meaning."
-        source_hint = target_name
-    elif source_code == "auto":
-        translate_instruction = f"Detect whether each section is Korean, English, Japanese, or Chinese and translate the Markdown into {target_name}."
-        source_hint = "Auto-detect (ko/en/ja/zh)"
-    else:
-        source_name = _language_name(source_code) or source_code
-        translate_instruction = f"Translate the following Markdown from {source_name} into {target_name}."
-        source_hint = source_name
-
-    prompt = (
-        f"You are a professional translator. {translate_instruction} "
-        "Keep structure and punctuation. Do not change numbers, dates, URLs, or code blocks.\n"
-        "Use the glossary strictly when applicable; do-not-translate terms must stay as-is.\n"
-        f"Source language hint: {source_hint}\n"
-        f"Target language: {target_name}\n"
-        f"{extra_text}"
-        f"Glossary(JSON): {glossary_text}\n\nSOURCE:\n```md\n{md_text}\n```"
-    )
-    messages = [
-        {"role": "system", "content": "Professional translator. Output only translated Markdown."},
-        {"role": "user", "content": prompt},
-    ]
-    kwargs = {"model": config.model, "messages": messages}
-    if not (config.model and config.model.lower() == "gpt-5"):
-        kwargs["temperature"] = config.temperature
-    resp = client.chat.completions.create(**kwargs)
-    return resp.choices[0].message.content or ""
+    # translate_markdown function removed (unused)
 
 
 # 이전 함수들은 더 이상 사용되지 않아 삭제됨 (reinsert_v2.py에서 직접 처리)

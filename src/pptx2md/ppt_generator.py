@@ -124,6 +124,12 @@ def create_translated_presentation_v2(
     slide_count = len(prs.slides)
     
     # 2. 모든 단락 정보 수집
+    # 진행 로그: 텍스트 및 서식 수집 시작
+    if progress_callback:
+        try:
+            progress_callback({"message": "PPT 분석: 텍스트 및 서식 수집 중...", "ratio": 0.02})
+        except Exception:
+            pass
     paragraph_infos: List[ParagraphInfo] = []
     texts_to_translate: List[str] = []
     
@@ -229,10 +235,15 @@ def create_translated_presentation_v2(
         _log(f"모델 응답 수신 — {batch_caption} ({start + 1}~{end}/{total})", ratio=ratio)
         translated_texts.extend(translated_batch)
 
-    _log("번역된 문장을 PPT에 반영 중...", ratio=0.9)
+    _log("PPT 반영: 번역된 텍스트 재삽입 및 서식 복원 중...", ratio=0.9)
     
     # 5. 번역된 텍스트 재삽입
-    for para_info, translated_text in zip(paragraph_infos, translated_texts):
+    total_apply = len(paragraph_infos)
+    for idx, (para_info, translated_text) in enumerate(zip(paragraph_infos, translated_texts)):
+        if total_apply > 0 and (idx + 1) % 50 == 0:
+            # 0.90~0.99 구간에서 세밀한 진행률 업데이트
+            stage_progress = (idx + 1) / max(1, total_apply)
+            _log(f"PPT 반영 진행 중... ({idx + 1}/{total_apply})", ratio=0.9 + 0.09 * stage_progress)
         paragraph = para_info.paragraph_ref
         
         # 안전성 검사

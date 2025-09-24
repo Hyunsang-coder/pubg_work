@@ -2,7 +2,6 @@ from __future__ import annotations
 import os, time, json, io, uuid, hashlib
 from contextlib import nullcontext
 import streamlit as st
-from dotenv import load_dotenv
 import sys
 try:
     import pandas as pd
@@ -161,7 +160,6 @@ def get_glossary_from_upload(uploaded_file):
         st.session_state.pop("cached_glossary_meta", None)
     return glossary
 
-load_dotenv()
 st.set_page_config(page_title="PPT 번역 솔루션", layout="centered")
 
 # Progress bar를 전체 영역 너비로 확장
