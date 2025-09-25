@@ -402,6 +402,10 @@ def run_action(action_type: str, *, progress_slot=None):
 
         if action_type == "translate_ppt":
             glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
+            # 이미지 최적화 설정 가져오기 (전역 변수가 아니므로 함수 내에서 재참조)
+            enable_img_opt = globals().get('enable_img_opt', False)
+            img_quality = globals().get('img_quality', 70)
+            img_max_px = globals().get('img_max_px', 1920)
             _set_progress(10, "용어집 적용 중...")
 
             cfg = TranslationConfig(
@@ -434,25 +438,41 @@ def run_action(action_type: str, *, progress_slot=None):
 
             spinner_cm = st.spinner("OpenAI 번역 처리 중...") if progress_slot is not None else nullcontext()
             with spinner_cm:
+                # 1) (선택) 번역 시작 전 입력 PPT를 이미지 최적화
+                input_path_for_translation = st.session_state.uploaded_path
+                img_optimization_stats = None
+                if enable_img_opt:
+                    _set_progress(12, "이미지 최적화 준비...")
+                    preopt_path = os.path.join(TMP_DIR, f".__preopt_{uuid.uuid4().hex}.pptx")
+                    def _on_preopt(payload: dict[str, float | str]) -> None:
+                        ratio = float(payload.get("ratio", 0.0)) if payload else 0.0
+                        message = f"이미지 최적화 — {payload.get('message','')}"
+                        # 12%~28% 구간에서 최적화 진행률 표시
+                        _set_progress(12 + int(min(16.0, ratio * 16.0)), message)
+                    try:
+                        img_optimization_stats = optimize_pptx_media_zip(st.session_state.uploaded_path, preopt_path, quality=img_quality, max_px=img_max_px, progress_cb=_on_preopt)
+                        # 결과 검증
+                        try:
+                            Presentation(preopt_path)
+                            input_path_for_translation = preopt_path
+                        except Exception:
+                            # 검증 실패 시 원본으로 진행
+                            try:
+                                os.remove(preopt_path)
+                            except Exception:
+                                pass
+                    except PermissionError:
+                        _set_progress(14, "이미지 최적화 실패(잠금/권한). 원본으로 진행합니다.")
+                    except Exception:
+                        _set_progress(14, "이미지 최적화 실패. 원본으로 진행합니다.")
+
+                # 2) 번역 실행 (28% 이후는 기존 비율 콜백 사용)
                 stats = create_translated_presentation_v2(
-                    st.session_state.uploaded_path,
+                    input_path_for_translation,
                     output_pptx,
                     cfg,
                     progress_callback=_on_progress,
                 )
-                # 선택 시, 번역 후 zip 레벨 이미지 최적화 적용 (동일 함수 재사용)
-                if 'enable_img_opt' in locals() and enable_img_opt:
-                    _set_progress(98, "이미지 최적화 중...")
-                    tmp_optimized = os.path.join(OUTPUT_DIR, f".__tmp_{uuid.uuid4().hex}.pptx")
-                    def _on_img(payload: dict[str, float | str]) -> None:
-                        ratio = float(payload.get("ratio", 0.0)) if payload else 0.0
-                        message = f"이미지 최적화 — {payload.get('message','')}"
-                        _set_progress(min(99.0, 98.0 + ratio * 2.0), message)
-                    img_stats = optimize_pptx_media_zip(output_pptx, tmp_optimized, quality=img_quality, max_px=img_max_px, progress_cb=_on_img)
-                    try:
-                        os.replace(tmp_optimized, output_pptx)
-                    except Exception:
-                        pass
 
             elapsed = int(time.time() - start)
             _set_progress(100, "PPT 번역 완료")
@@ -460,34 +480,45 @@ def run_action(action_type: str, *, progress_slot=None):
             st.session_state.output_pptx_path = output_pptx
             st.session_state.output_pptx_name = file_name
             st.session_state.last_action = "translate_ppt"
-            # 상세 로그 메시지
+            # 상세 로그 메시지 (구조화된 형태)
             try:
                 output_size_mb = os.path.getsize(output_pptx) / (1024 * 1024)
                 input_size_mb = os.path.getsize(st.session_state.uploaded_path) / (1024 * 1024) if st.session_state.uploaded_path else 0
                 glossary_count = len(glossary) if isinstance(glossary, dict) else 0
-                glossary_part = f"용어집 {glossary_count}항목 적용" if glossary_count > 0 else "용어집 없음"
+                glossary_part = f"{glossary_count}항목 적용" if glossary_count > 0 else "없음"
                 model_name = model if 'model' in locals() else getattr(cfg, 'model', 'unknown')
                 stats = stats or {}
-                stats_details = []
-                slide_count = stats.get("slides") if isinstance(stats, dict) else None
-                word_count = stats.get("word_count") if isinstance(stats, dict) else None
-                if isinstance(slide_count, int):
-                    stats_details.append(f"슬라이드 {slide_count}개")
-                if isinstance(word_count, int):
-                    stats_details.append(f"번역 단어 {word_count:,}개")
-                summary_parts = [f"모델 {model_name}", glossary_part]
-                language_pair = st.session_state.get("language_pair_display")
-                if language_pair:
-                    summary_parts.append(f"언어 {language_pair}")
-                summary_parts.extend(stats_details)
-                summary_parts.append(f"소요 {elapsed//60}분 {elapsed%60}초")
-                summary_parts.append(
-                    f"출력 '{st.session_state.output_pptx_name}'({output_size_mb:.1f}MB)"
-                )
-                summary_parts.append(f"입력 {input_size_mb:.1f}MB")
-                msg = "PPT 번역 완료 — " + ", ".join(summary_parts)
+                slide_count = stats.get("slides") if isinstance(stats, dict) else 0
+                word_count = stats.get("word_count") if isinstance(stats, dict) else 0
+                language_pair = st.session_state.get("language_pair_display", "")
+                
+                # 이미지 최적화 정보 추가
+                img_info = ""
+                if enable_img_opt and img_optimization_stats:
+                    img_optimized = img_optimization_stats.get("optimized", 0)
+                    img_candidates = img_optimization_stats.get("media", 0)
+                    img_saved_mb = img_optimization_stats.get("bytes_saved", 0) / (1024 * 1024)
+                    img_info = f"\n\n🖼️ 이미지 최적화\n• 후보: {img_candidates}개 → 성공: {img_optimized}개\n• 용량 절감: {img_saved_mb:.1f}MB"
+                
+                reduction_pct = ((input_size_mb - output_size_mb) / input_size_mb * 100) if input_size_mb > 0 else 0
+                
+                msg = f"""✅ PPT 번역 완료
+
+📊 번역 정보
+• 언어: {language_pair}
+• 모델: {model_name}
+• 용어집: {glossary_part}
+• 슬라이드: {slide_count}개
+• 번역 단어: {word_count:,}개{img_info}
+
+📁 파일 정보
+• 입력: {input_size_mb:.1f}MB
+• 출력: {output_size_mb:.1f}MB ({reduction_pct:.0f}% 절감)
+• 파일명: {st.session_state.output_pptx_name}
+
+⏱️ 소요 시간: {elapsed//60}분 {elapsed%60}초"""
             except Exception:
-                msg = f"PPT 번역 완료 (소요 {elapsed//60}분 {elapsed%60}초)"
+                msg = f"✅ PPT 번역 완료\n\n⏱️ 소요 시간: {elapsed//60}분 {elapsed%60}초"
             _set_status("success", msg)
             st.rerun()
 
@@ -632,11 +663,47 @@ elif current_page == "optimize_images":
                 progress_bar.progress(pct, text=msg)
             out_name = os.path.splitext(uploaded.name)[0] + "_optimized.pptx"
             out_path = os.path.join(OUTPUT_DIR, out_name)
-            stats = optimize_pptx_media_zip(tmp_path, out_path, quality=img_quality, max_px=img_max_px, progress_cb=_cb)
-        mb = stats.get("bytes_saved", 0) / (1024 * 1024)
-        st.success(f"완료 — 최적화 {stats.get('optimized',0)}개, 절감 {mb:.1f}MB")
-        with open(out_path, "rb") as f:
-            st.download_button("최적화 PPT 다운로드", data=f.read(), file_name=out_name, mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+            try:
+                stats = optimize_pptx_media_zip(tmp_path, out_path, quality=img_quality, max_px=img_max_px, progress_cb=_cb)
+                # 결과 검증
+                verified = True
+                try:
+                    Presentation(out_path)
+                except Exception:
+                    verified = False
+                if not verified:
+                    st.error("최적화 결과 검증 실패. 결과 파일을 폐기하고 원본을 유지합니다.")
+                    try:
+                        os.remove(out_path)
+                    except Exception:
+                        pass
+                else:
+                    # 구조화된 성공 메시지
+                    input_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
+                    output_size_mb = os.path.getsize(out_path) / (1024 * 1024)
+                    reduction_pct = ((input_size_mb - output_size_mb) / input_size_mb * 100) if input_size_mb > 0 else 0
+                    img_optimized = stats.get("optimized", 0)
+                    img_candidates = stats.get("media", 0)
+                    img_saved_mb = stats.get("bytes_saved", 0) / (1024 * 1024)
+                    
+                    success_msg = f"""✅ 이미지 최적화 완료
+
+🖼️ 이미지 최적화
+• 후보: {img_candidates}개 → 성공: {img_optimized}개
+• 용량 절감: {img_saved_mb:.1f}MB
+
+📁 파일 정보
+• 입력: {input_size_mb:.1f}MB
+• 출력: {output_size_mb:.1f}MB ({reduction_pct:.0f}% 절감)
+• 파일명: {out_name}"""
+                    
+                    st.success(success_msg)
+                    with open(out_path, "rb") as f:
+                        st.download_button("최적화 PPT 다운로드", data=f.read(), file_name=out_name, mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+            except PermissionError:
+                st.error("파일 잠금/권한 문제로 저장에 실패했습니다. 열려있는 PPT를 닫고 다시 시도하세요.")
+            except Exception as e:
+                st.error(f"이미지 최적화 실패: {e}")
 
 # 페이지별 결과 표시
 if current_page == "extract":
