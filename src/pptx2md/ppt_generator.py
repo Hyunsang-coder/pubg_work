@@ -1,9 +1,16 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Dict, Any, Callable, Optional
+import io
+import hashlib
+import os
+import zipfile
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
 from pptx.shapes.shapetree import SlideShapes
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.enum.dml import MSO_FILL
+from PIL import Image, ImageOps
 from .translate import translate_texts, TranslationConfig
 
 
@@ -100,6 +107,251 @@ def _apply_font_properties(run, font_props: Dict[str, Any]):
         pass
 
 
+def _iter_all_shapes(shapes: SlideShapes):
+    """그룹 내 모든 도형 재귀 순회 (이미지 최적화용)"""
+    for s in shapes:
+        if isinstance(s, GroupShape):
+            for sub in _iter_all_shapes(s.shapes):
+                yield sub
+        else:
+            yield s
+
+
+def _downscale_image(img: Image.Image, max_px: int) -> Image.Image:
+    """긴 변 기준으로 리사이즈. max_px가 0이거나 작으면 그대로 반환"""
+    if not max_px or max_px <= 0:
+        return img
+    width, height = img.size
+    longest = max(width, height)
+    if longest <= max_px:
+        return img
+    scale = max_px / float(longest)
+    new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+    return img.resize(new_size, Image.LANCZOS)
+
+
+def _recompress_blob(original: bytes, *, quality: int, max_px: int) -> bytes | None:
+    """이미지 바이트를 Pillow로 재압축. 용량이 줄어들지 않으면 None 반환."""
+    try:
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(io.BytesIO(original)) as im:
+            im.load()
+            # EXIF 방향 보정 (손상 방지)
+            im = ImageOps.exif_transpose(im)
+            fmt = (im.format or "PNG").upper()
+            im2 = _downscale_image(im, max_px)
+
+            buf = io.BytesIO()
+            if fmt in ("JPEG", "JPG"):
+                im3 = im2.convert("RGB")
+                q = max(10, min(95, int(quality))) if isinstance(quality, int) else 70
+                # baseline JPEG (progressive 비활성화)로 호환성 개선
+                im3.save(buf, "JPEG", quality=q, optimize=True)
+            elif fmt == "PNG":
+                im2.save(buf, "PNG", optimize=True)
+            else:
+                return None
+            data = buf.getvalue()
+            if len(data) < len(original):
+                return data
+            return None
+    except Exception:
+        return None
+
+
+def compress_images_in_presentation(
+    prs: Presentation,
+    *,
+    quality: int = 70,
+    max_px: int = 1920,
+    progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, int]:
+    """프레젠테이션 내 래스터 이미지(JPEG/PNG)를 다운스케일/재압축.
+
+    Returns: {"pictures": 전체 그림 개수, "candidates": 처리 시도, "optimized": 최적화 성공, "failures": 실패, "bytes_saved": 절감 바이트}
+    """
+    cache: Dict[str, Optional[bytes]] = {}
+    stats = {
+        "pictures": 0,
+        "fills": 0,
+        "backgrounds": 0,
+        "candidates": 0,
+        "optimized": 0,
+        "failures": 0,
+        "bytes_saved": 0,
+        "skipped_no_saving": 0,
+        "unsupported_formats": 0,
+    }
+    if progress_cb:
+        try:
+            progress_cb({"message": "이미지 최적화 시작...", "ratio": 0.99})
+        except Exception:
+            pass
+    for slide in prs.slides:
+        for shp in _iter_all_shapes(slide.shapes):
+            try:
+                if shp.shape_type != MSO_SHAPE_TYPE.PICTURE or not hasattr(shp, "_element"):
+                    # 도형이 이미지가 아니더라도 그림 채움(Picture Fill)인 경우 최적화 대상
+                    try:
+                        if hasattr(shp, "fill") and getattr(shp.fill, "type", None) == MSO_FILL.PICTURE:
+                            stats["fills"] += 1
+                            blipFill = getattr(shp.fill, "_xFill", None)
+                            blipFill = getattr(blipFill, "blipFill", None)
+                            if blipFill is None or getattr(blipFill, "blip", None) is None:
+                                continue
+                            blip = blipFill.blip
+                            rId = getattr(blip, "embed", None) or getattr(blip, "link", None)
+                            if not rId:
+                                continue
+                            part = shp.part.related_parts.get(rId)
+                            if part is None or not hasattr(part, "blob"):
+                                continue
+                            orig = part.blob
+                            stats["candidates"] += 1
+                            h = hashlib.md5(orig).hexdigest()
+                            if h in cache:
+                                new_blob = cache[h]
+                            else:
+                                new_blob = _recompress_blob(orig, quality=quality, max_px=max_px)
+                                cache[h] = new_blob
+                            if new_blob and len(new_blob) < len(orig):
+                                part._blob = new_blob  # type: ignore[attr-defined]
+                                stats["optimized"] += 1
+                                stats["bytes_saved"] += (len(orig) - len(new_blob))
+                                if progress_cb and stats["optimized"] % 10 == 0:
+                                    try:
+                                        progress_cb({"message": f"이미지 최적화 진행 중... ({stats['optimized']}개)", "ratio": 0.995})
+                                    except Exception:
+                                        pass
+                            else:
+                                stats["skipped_no_saving"] += 1
+                        continue
+                    except Exception:
+                        stats["failures"] += 1
+                        continue
+                stats["pictures"] += 1
+                blipFill = getattr(shp._element, "blipFill", None)
+                if blipFill is None or getattr(blipFill, "blip", None) is None:
+                    continue
+                blip = blipFill.blip
+                rId = getattr(blip, "embed", None) or getattr(blip, "link", None)
+                if not rId:
+                    continue
+                part = shp.part.related_parts.get(rId)
+                if part is None or not hasattr(part, "blob"):
+                    continue
+                orig = part.blob
+                stats["candidates"] += 1
+                h = hashlib.md5(orig).hexdigest()
+                if h in cache:
+                    new_blob = cache[h]
+                else:
+                    new_blob = _recompress_blob(orig, quality=quality, max_px=max_px)
+                    cache[h] = new_blob
+                if new_blob and len(new_blob) < len(orig):
+                    part._blob = new_blob  # type: ignore[attr-defined]
+                    stats["optimized"] += 1
+                    stats["bytes_saved"] += (len(orig) - len(new_blob))
+                    if progress_cb and stats["optimized"] % 10 == 0:
+                        try:
+                            progress_cb({"message": f"이미지 최적화 진행 중... ({stats['optimized']}개)", "ratio": 0.995})
+                        except Exception:
+                            pass
+                else:
+                    stats["skipped_no_saving"] += 1
+            except Exception:
+                stats["failures"] += 1
+                continue
+        # 슬라이드 배경 그림 최적화
+        try:
+            if hasattr(slide, "background") and hasattr(slide.background, "fill"):
+                fill = slide.background.fill
+                if getattr(fill, "type", None) == MSO_FILL.PICTURE:
+                    stats["backgrounds"] += 1
+                    blipFill = getattr(fill, "_xFill", None)
+                    blipFill = getattr(blipFill, "blipFill", None)
+                    if blipFill is not None and getattr(blipFill, "blip", None) is not None:
+                        blip = blipFill.blip
+                        rId = getattr(blip, "embed", None) or getattr(blip, "link", None)
+                        if rId:
+                            part = slide.part.related_parts.get(rId)
+                            if part is not None and hasattr(part, "blob"):
+                                orig = part.blob
+                                stats["candidates"] += 1
+                                h = hashlib.md5(orig).hexdigest()
+                                if h in cache:
+                                    new_blob = cache[h]
+                                else:
+                                    new_blob = _recompress_blob(orig, quality=quality, max_px=max_px)
+                                    cache[h] = new_blob
+                                if new_blob and len(new_blob) < len(orig):
+                                    part._blob = new_blob  # type: ignore[attr-defined]
+                                    stats["optimized"] += 1
+                                    stats["bytes_saved"] += (len(orig) - len(new_blob))
+                                else:
+                                    stats["skipped_no_saving"] += 1
+        except Exception:
+            stats["failures"] += 1
+    if progress_cb:
+        try:
+            mb = stats["bytes_saved"] / (1024 * 1024)
+            progress_cb({"message": f"이미지 최적화 완료 — 후보 {stats['candidates']}개, 성공 {stats['optimized']}개, 절감 {mb:.1f}MB (채움 {stats['fills']} / 배경 {stats['backgrounds']})", "ratio": 0.999})
+        except Exception:
+            pass
+    return stats
+
+
+def optimize_pptx_media_zip(
+    input_pptx_path: str,
+    output_pptx_path: str,
+    *,
+    quality: int = 70,
+    max_px: int = 1920,
+    progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, int]:
+    """ZIP 레벨에서 ppt/media/* 이미지를 재압축하여 XML 손상 리스크 없이 용량 최적화.
+
+    Returns: {"media": 총 media 이미지 수, "optimized": 성공, "failures": 실패, "bytes_saved": 절감 바이트}
+    """
+    stats = {"media": 0, "optimized": 0, "failures": 0, "bytes_saved": 0}
+    if progress_cb:
+        try:
+            progress_cb({"message": "미디어 스캔 시작...", "ratio": 0.01})
+        except Exception:
+            pass
+    os.makedirs(os.path.dirname(os.path.abspath(output_pptx_path)), exist_ok=True)
+    with zipfile.ZipFile(input_pptx_path, "r") as zin, zipfile.ZipFile(output_pptx_path, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        namelist = zin.namelist()
+        total_media = sum(1 for n in namelist if n.startswith("ppt/media/") and n.lower().endswith((".jpg", ".jpeg", ".png")))
+        processed = 0
+        for name in namelist:
+            data = zin.read(name)
+            lower = name.lower()
+            if name.startswith("ppt/media/") and lower.endswith((".jpg", ".jpeg", ".png")):
+                stats["media"] += 1
+                try:
+                    new_blob = _recompress_blob(data, quality=quality, max_px=max_px)
+                    if new_blob and len(new_blob) < len(data):
+                        zout.writestr(name, new_blob)
+                        stats["optimized"] += 1
+                        stats["bytes_saved"] += (len(data) - len(new_blob))
+                    else:
+                        zout.writestr(name, data)
+                    processed += 1
+                    if progress_cb and total_media:
+                        ratio = 0.02 + 0.96 * (processed / total_media)
+                        try:
+                            progress_cb({"message": f"미디어 최적화 진행 {processed}/{total_media}", "ratio": ratio})
+                        except Exception:
+                            pass
+                except Exception:
+                    stats["failures"] += 1
+                    zout.writestr(name, data)
+            else:
+                zout.writestr(name, data)
+    return stats
+
+
 def create_translated_presentation_v2(
     input_pptx: str,
     output_pptx: str,
@@ -107,6 +359,7 @@ def create_translated_presentation_v2(
     *,
     progress_callback: Optional[Callable[[str], None]] = None,
     batch_size: int = 400,
+    image_opt: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, int]:
     """
     하이브리드 접근 방식으로 프레젠테이션을 번역하는 함수
@@ -267,6 +520,22 @@ def create_translated_presentation_v2(
             # 개별 단락 처리 실패 시 무시하고 계속 진행
             continue
     translated_word_count = sum(len(text.split()) for text in translated_texts) if translated_texts else word_count_source
+
+    # 선택적 이미지 최적화 단계
+    if image_opt:
+        try:
+            q = int(image_opt.get("quality", 70))  # type: ignore[union-attr]
+            max_px = int(image_opt.get("max_px", 1920))  # type: ignore[union-attr]
+            _log("이미지 최적화 중...", ratio=0.99)
+            img_stats = compress_images_in_presentation(prs, quality=q, max_px=max_px, progress_cb=progress_callback)
+            try:
+                saved_mb = float(img_stats.get("bytes_saved", 0)) / (1024 * 1024)
+                _log(f"이미지 최적화 요약 — 성공 {img_stats.get('optimized',0)}개, 절감 {saved_mb:.1f}MB", ratio=0.999)
+            except Exception:
+                pass
+        except Exception:
+            # 최적화 실패해도 전체 흐름에는 영향 주지 않음
+            pass
 
     _log("번역 결과 저장 완료", ratio=1.0)
     # 6. 프레젠테이션 저장

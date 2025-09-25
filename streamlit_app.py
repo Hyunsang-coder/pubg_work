@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os, time, json, io, uuid, hashlib
 from contextlib import nullcontext
+from pptx import Presentation
 import streamlit as st
 import sys
 try:
@@ -20,7 +21,7 @@ from src.pptx2md.extract import extract_pptx_to_docs
 from src.pptx2md.markdown import docs_to_markdown
 from src.pptx2md.options import ExtractOptions
 from src.pptx2md.translate import TranslationConfig
-from src.pptx2md.ppt_generator import create_translated_presentation_v2
+from src.pptx2md.ppt_generator import create_translated_presentation_v2, compress_images_in_presentation, optimize_pptx_media_zip
 
 # 용어집 파일 제한 설정
 MAX_GLOSSARY_ENTRIES = 500  # 최대 용어 개수
@@ -230,7 +231,7 @@ with st.sidebar:
     # 페이지 네비게이션 버튼
     current_page = st.session_state.get("current_page", "extract")
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("📄 텍스트 추출", use_container_width=True, type="primary" if current_page == "extract" else "secondary"):
             st.session_state.current_page = "extract"
@@ -239,6 +240,11 @@ with st.sidebar:
     with col2:
         if st.button("🌐 PPT 번역", use_container_width=True, type="primary" if current_page == "translate" else "secondary"):
             st.session_state.current_page = "translate"
+            st.rerun()
+
+    with col3:
+        if st.button("🖼️ 이미지 최적화", use_container_width=True, type="primary" if current_page == "optimize_images" else "secondary"):
+            st.session_state.current_page = "optimize_images"
             st.rerun()
     
     st.divider()
@@ -310,6 +316,15 @@ with st.sidebar:
         
         extra_prompt = st.text_area("번역 프롬프트", value=default_prompt, height=150, placeholder="톤, 스타일, 용어 규칙 등...")
         
+        # 이미지 최적화 옵션
+        st.markdown("**이미지 품질 최적화**")
+        enable_img_opt = st.checkbox("이미지 용량 최적화 활성화", value=False, help="고해상도 이미지를 다운스케일/재압축하여 PPT 용량을 줄입니다.")
+        col_q, col_px = st.columns(2)
+        with col_q:
+            img_quality = st.slider("JPEG 품질(%)", min_value=10, max_value=95, value=70, step=5, help="낮을수록 용량이 줄지만 품질이 떨어집니다.")
+        with col_px:
+            img_max_px = st.slider("최대 긴 변(px)", min_value=800, max_value=4096, value=1920, step=160, help="이 값보다 큰 이미지를 비율 유지하며 축소합니다.")
+
         # 용어집 파일 업로더 - JSON과 엑셀 모두 지원
         glossary_file = st.file_uploader(
             "용어집 파일", 
@@ -345,6 +360,11 @@ with st.sidebar:
         with_notes = False
         figures = "placeholder"
         charts = "labels"
+
+    elif current_page == "optimize_images":
+        st.subheader("이미지 최적화 옵션")
+        img_quality = st.slider("JPEG 품질(%)", min_value=10, max_value=95, value=70, step=5)
+        img_max_px = st.slider("최대 긴 변(px)", min_value=800, max_value=4096, value=1920, step=160)
 
 for k in ["uploaded_path", "docs", "markdown", "output_pptx_path", "output_pptx_name"]:
     if k not in st.session_state:
@@ -420,6 +440,19 @@ def run_action(action_type: str, *, progress_slot=None):
                     cfg,
                     progress_callback=_on_progress,
                 )
+                # 선택 시, 번역 후 zip 레벨 이미지 최적화 적용 (동일 함수 재사용)
+                if 'enable_img_opt' in locals() and enable_img_opt:
+                    _set_progress(98, "이미지 최적화 중...")
+                    tmp_optimized = os.path.join(OUTPUT_DIR, f".__tmp_{uuid.uuid4().hex}.pptx")
+                    def _on_img(payload: dict[str, float | str]) -> None:
+                        ratio = float(payload.get("ratio", 0.0)) if payload else 0.0
+                        message = f"이미지 최적화 — {payload.get('message','')}"
+                        _set_progress(min(99.0, 98.0 + ratio * 2.0), message)
+                    img_stats = optimize_pptx_media_zip(output_pptx, tmp_optimized, quality=img_quality, max_px=img_max_px, progress_cb=_on_img)
+                    try:
+                        os.replace(tmp_optimized, output_pptx)
+                    except Exception:
+                        pass
 
             elapsed = int(time.time() - start)
             _set_progress(100, "PPT 번역 완료")
@@ -577,6 +610,33 @@ elif current_page == "translate":
     ppt_progress_slot = st.empty()
     if generate_clicked:
         run_action("translate_ppt", progress_slot=ppt_progress_slot)
+
+elif current_page == "optimize_images":
+    st.header("🖼️ PPT 이미지 최적화")
+    st.write("PPT 내부 이미지를 다운스케일/재압축하여 용량을 줄입니다. 텍스트는 변경하지 않습니다.")
+
+    uploaded = st.file_uploader("PPTX 파일 업로드", type=["pptx"], key="opt_uploader")
+    opt_progress = st.empty()
+    optimize_clicked = st.button("이미지 최적화", use_container_width=True, disabled=not uploaded)
+    if uploaded and optimize_clicked:
+        tmp_filename = f"{uuid.uuid4().hex}_{uploaded.name}"
+        tmp_path = os.path.join(TMP_DIR, tmp_filename)
+        with open(tmp_path, "wb") as f:
+            f.write(uploaded.getvalue())
+
+        with st.spinner("이미지 최적화 중..."):
+            progress_bar = opt_progress.progress(0)
+            def _cb(payload: dict):
+                pct = int(min(100, max(0, float(payload.get("ratio", 0.0)) * 100)))
+                msg = str(payload.get("message", ""))
+                progress_bar.progress(pct, text=msg)
+            out_name = os.path.splitext(uploaded.name)[0] + "_optimized.pptx"
+            out_path = os.path.join(OUTPUT_DIR, out_name)
+            stats = optimize_pptx_media_zip(tmp_path, out_path, quality=img_quality, max_px=img_max_px, progress_cb=_cb)
+        mb = stats.get("bytes_saved", 0) / (1024 * 1024)
+        st.success(f"완료 — 최적화 {stats.get('optimized',0)}개, 절감 {mb:.1f}MB")
+        with open(out_path, "rb") as f:
+            st.download_button("최적화 PPT 다운로드", data=f.read(), file_name=out_name, mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
 
 # 페이지별 결과 표시
 if current_page == "extract":
