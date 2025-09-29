@@ -234,17 +234,17 @@ with st.sidebar:
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("📄 텍스트 추출", use_container_width=True, type="primary" if current_page == "extract" else "secondary"):
+        if st.button("📄 텍스트 추출", width="stretch", type="primary" if current_page == "extract" else "secondary"):
             st.session_state.current_page = "extract"
             st.rerun()
     
     with col2:
-        if st.button("🌐 PPT 번역", use_container_width=True, type="primary" if current_page == "translate" else "secondary"):
+        if st.button("🌐 PPT 번역", width="stretch", type="primary" if current_page == "translate" else "secondary"):
             st.session_state.current_page = "translate"
             st.rerun()
 
     with col3:
-        if st.button("🖼️ 이미지 최적화", use_container_width=True, type="primary" if current_page == "optimize_images" else "secondary"):
+        if st.button("🖼️ 이미지 최적화", width="stretch", type="primary" if current_page == "optimize_images" else "secondary"):
             st.session_state.current_page = "optimize_images"
             st.rerun()
     
@@ -626,7 +626,7 @@ if current_page == "extract":
             st.session_state.preflight_ambiguity_responses = {}
             st.session_state.preflight_result_version = 0
 
-    extract_clicked = st.button("Markdown 변환", use_container_width=True, disabled=not st.session_state.uploaded_path)
+    extract_clicked = st.button("Markdown 변환", width="stretch", disabled=not st.session_state.uploaded_path)
     extract_progress_slot = st.empty()
     if extract_clicked:
         _set_status(None)
@@ -698,7 +698,7 @@ elif current_page == "translate":
             st.session_state.output_pptx_name = None
             st.session_state.uploaded_file_meta = meta
 
-    preflight_clicked = st.button("용어 분석 실행", use_container_width=True, disabled=not st.session_state.uploaded_path)
+    preflight_clicked = st.button("용어 분석 실행", width="stretch", disabled=not st.session_state.uploaded_path)
     if preflight_clicked and st.session_state.uploaded_path:
         _set_status(None)
         with st.spinner("용어 분석 중..."):
@@ -777,7 +777,7 @@ elif current_page == "translate":
                 terms_df = st.data_editor(
                     st.session_state.preflight_terms_data,
                     key="preflight_terms_editor_widget",
-                    use_container_width=True,
+                    width="stretch",
                     num_rows="dynamic",
                     hide_index=True,
                     column_config={
@@ -831,7 +831,7 @@ elif current_page == "translate":
                 updated_responses[item] = response.strip()
             st.session_state.preflight_ambiguity_responses = updated_responses
 
-    generate_clicked = st.button("번역된 PPT 생성", use_container_width=True, disabled=not st.session_state.uploaded_path)
+    generate_clicked = st.button("번역된 PPT 생성", width="stretch", disabled=not st.session_state.uploaded_path)
     ppt_progress_slot = st.empty()
     if generate_clicked:
         run_action("translate_ppt", progress_slot=ppt_progress_slot)
@@ -842,7 +842,7 @@ elif current_page == "optimize_images":
 
     uploaded = st.file_uploader("PPTX 파일 업로드", type=["pptx"], key="opt_uploader")
     opt_progress = st.empty()
-    optimize_clicked = st.button("이미지 최적화", use_container_width=True, disabled=not uploaded)
+    optimize_clicked = st.button("이미지 최적화", width="stretch", disabled=not uploaded)
     if uploaded and optimize_clicked:
         tmp_filename = f"{uuid.uuid4().hex}_{uploaded.name}"
         tmp_path = os.path.join(TMP_DIR, tmp_filename)
