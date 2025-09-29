@@ -1,0 +1,13 @@
+steps:
+  - name: update_dependencies_and_progress_tracking
+    status: completed
+    details: "Added langchain dependencies and created progress tracker"
+  - name: implement_preflight_module
+    status: completed
+    details: "Implemented terminology preflight module with LangChain-based LLM call"
+  - name: integrate_langchain_translator_and_streamlit
+    status: completed
+    details: "Swapped translator to LangChain chain and wired Streamlit preflight UI"
+  - name: verify_and_document
+    status: completed
+    details: "Compiled sources to check syntax and summarized changes"

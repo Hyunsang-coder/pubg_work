@@ -3,10 +3,18 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-from openai import OpenAI
-from dotenv import load_dotenv, find_dotenv
+from dotenv import find_dotenv, load_dotenv
+
+os.environ.setdefault("OPENAI_USE_SIGNAL_TIMEOUT", "0")
+_DOTENV_LOADED = load_dotenv(find_dotenv(usecwd=True), override=False)
+
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
+
 LANGUAGE_NAMES = {
     "ko": "Korean",
     "en": "English",
@@ -26,59 +34,50 @@ class TranslationConfig:
     source_lang: str = "auto"
     target_lang: str = "en"
     model: str = os.getenv("OPENAI_TRANSLATE_MODEL", "gpt-4o-mini")
-    temperature: float = 0.1  # Keep low variance so JSON schema stays stable
+    temperature: float = 0.1
     glossary: Optional[Dict[str, str]] = None
     extra_instructions: Optional[str] = None
 
 
-def _get_openai_client() -> OpenAI:
-    load_dotenv(find_dotenv(usecwd=True), override=False)
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPEN_API_KEY")
-    if not api_key:
-        try:
-            import streamlit as st  # type: ignore
-            api_key = st.secrets.get("OPENAI_API_KEY")
-        except Exception:
-            api_key = None
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not set in .env or Streamlit secrets.")
-    return OpenAI(api_key=api_key)
+class _TranslationPayload(BaseModel):
+    result: List[str] = Field(..., description="Translated strings in original order")
 
 
-MAX_TRANSLATION_RETRIES = 1
+def _build_translation_chain(config: TranslationConfig):
+    parser = JsonOutputParser(pydantic_object=_TranslationPayload)
+    prompt = ChatPromptTemplate.from_messages([
+        (
+            "system",
+            "You are a meticulous translator for professional game development and marketing decks. "
+            "Always respond with JSON only.\n\n{format_instructions}",
+        ),
+        (
+            "user",
+            "{instruction}\n"
+            "Source language hint: {source_hint}\n"
+            "Target language: {target_name}\n"
+            "Glossary JSON: {glossary_json}\n"
+            "Extra instructions: {extra_instructions}\n"
+            "SOURCE(JSON): {source_json}",
+        ),
+    ]).partial(format_instructions=parser.get_format_instructions())
 
+    temperature = config.temperature
+    if config.model and config.model.lower() == "gpt-5":
+        temperature = 0.0
 
-def _decode_translation_payload(content: str) -> List[str]:
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError("Invalid JSON payload") from exc
-
-    if not isinstance(data, dict):
-        raise ValueError("Payload root is not an object")
-
-    result: Any = data.get("result")
-    if not isinstance(result, list):
-        raise ValueError("Missing 'result' array")
-
-    normalized: List[str] = []
-    for item in result:
-        if isinstance(item, str):
-            normalized.append(item)
-        elif item is None:
-            normalized.append("")
-        else:
-            normalized.append(str(item))
-
-    return normalized
+    chat = ChatOpenAI(
+        model=config.model,
+        temperature=temperature,
+        response_format={"type": "json_object"},
+    )
+    return prompt | chat | parser
 
 
 def translate_texts(texts: List[str], config: TranslationConfig) -> List[str]:
     if not texts:
         return []
-    client = _get_openai_client()
-    use_temperature = config.model.lower() != "gpt-5" if config.model else True
-    # In-batch duplicate caching: translate unique sentences once
+
     index_of: Dict[str, int] = {}
     unique_texts: List[str] = []
     back_refs: List[int] = []
@@ -90,6 +89,7 @@ def translate_texts(texts: List[str], config: TranslationConfig) -> List[str]:
             index_of[t] = idx
             unique_texts.append(t)
             back_refs.append(idx)
+
     target_code = (config.target_lang or "en").lower()
     if target_code == "auto":
         target_name = "Auto (opposite language)"
@@ -103,7 +103,9 @@ def translate_texts(texts: List[str], config: TranslationConfig) -> List[str]:
         translate_instruction = f"Polish each item in {target_name} and improve clarity while keeping the meaning."
         source_hint = target_name
     elif source_code == "auto":
-        translate_instruction = f"Detect whether each item is Korean, English, Japanese, or Chinese and translate it into {target_name}."
+        translate_instruction = (
+            f"Detect whether each item is Korean, English, Japanese, or Chinese and translate it into {target_name}."
+        )
         source_hint = "Auto-detect (ko/en/ja/zh)"
     else:
         source_name = _language_name(source_code) or source_code
@@ -111,54 +113,23 @@ def translate_texts(texts: List[str], config: TranslationConfig) -> List[str]:
         source_hint = source_name
 
     source_payload = unique_texts
-    prompt = (
-        f"{translate_instruction} Keep numbers/dates/URLs/code unchanged. "
-        "Return only JSON with a 'result' array of translated strings matching the SOURCE order and length.\n"
-        f"Source language hint: {source_hint}\n"
-        f"Target language: {target_name}\n"
-        f"Glossary(JSON): {json.dumps(config.glossary or {}, ensure_ascii=False)}\n"
-        f"Extra Instructions: {config.extra_instructions or 'None'}\n"
-        f"SOURCE(JSON): {json.dumps(source_payload, ensure_ascii=False)}"
-    )
+    chain = _build_translation_chain(config)
+    payload = {
+        "instruction": translate_instruction + " Keep numbers/dates/URLs/code unchanged.",
+        "source_hint": source_hint,
+        "target_name": target_name,
+        "glossary_json": json.dumps(config.glossary or {}, ensure_ascii=False),
+        "extra_instructions": config.extra_instructions or "None",
+        "source_json": json.dumps(source_payload, ensure_ascii=False),
+    }
 
-    messages = [
-        {"role": "system", "content": "You are a translator. Output only valid JSON."},
-        {"role": "user", "content": prompt},
-    ]
+    try:
+        response: _TranslationPayload = chain.invoke(payload)
+    except Exception as exc:
+        raise RuntimeError("번역 응답을 가져오는데 실패했습니다.") from exc
 
-    for attempt in range(MAX_TRANSLATION_RETRIES + 1):
-        kwargs = {
-            "model": config.model,
-            "messages": messages,
-            "response_format": {"type": "json_object"},
-        }
-        if use_temperature:
-            kwargs["temperature"] = config.temperature
-        resp = client.chat.completions.create(**kwargs)
-        content = (resp.choices[0].message.content or "{}").strip()
-        try:
-            decoded = _decode_translation_payload(content)
-            if len(decoded) != len(source_payload):
-                raise ValueError("LENGTH_MISMATCH")
-            return [decoded[i] for i in back_refs]
-        except ValueError as exc:
-            if exc.args and exc.args[0] == "LENGTH_MISMATCH":
-                guidance = (
-                    "번역 응답에 누락된 항목이 있어 실패했습니다. '번역된 PPT 생성'을 다시 실행하거나 다른 모델을 선택해주세요."
-                )
-                raise RuntimeError(guidance) from exc
-            if attempt >= MAX_TRANSLATION_RETRIES:
-                snippet = content[:2000]
-                raise RuntimeError(f"번역 응답 파싱에 실패했습니다. 응답: {snippet}") from exc
-            messages.append({
-                "role": "system",
-                "content": "Your previous reply was not valid JSON. Return only `{\"result\": [\"...\"]}` with the correct length."
-            })
-    raise RuntimeError("번역 응답 파싱에 실패했습니다.")
+    decoded = response.result
+    if len(decoded) != len(source_payload):
+        raise RuntimeError("번역 응답 길이가 원본과 일치하지 않습니다.")
 
-
-
-    # translate_markdown function removed (unused)
-
-
-# 이전 함수들은 더 이상 사용되지 않아 삭제됨 (reinsert_v2.py에서 직접 처리)
+    return [decoded[i] for i in back_refs]

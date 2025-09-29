@@ -74,4 +74,10 @@ def download(filename: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+    # Streamlit 등 다른 실행 환경에서 import될 때 signal 관련 오류가 발생하지 않도록
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 5000)),
+        debug=True,
+        use_reloader=False,
+    )

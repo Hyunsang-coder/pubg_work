@@ -21,6 +21,7 @@ from src.pptx2md.extract import extract_pptx_to_docs
 from src.pptx2md.markdown import docs_to_markdown
 from src.pptx2md.options import ExtractOptions
 from src.pptx2md.translate import TranslationConfig
+from src.pptx2md.preflight import run_preflight, PreflightResult
 from src.pptx2md.ppt_generator import create_translated_presentation_v2, compress_images_in_presentation, optimize_pptx_media_zip
 
 # 용어집 파일 제한 설정
@@ -376,6 +377,15 @@ if "last_action" not in st.session_state:
 if "current_page" not in st.session_state:
     st.session_state.current_page = "extract"
 
+if "preflight_result" not in st.session_state:
+    st.session_state.preflight_result = None
+if "preflight_glossary_dict" not in st.session_state:
+    st.session_state.preflight_glossary_dict = {}
+if "preflight_style_note" not in st.session_state:
+    st.session_state.preflight_style_note = ""
+if "use_preflight_glossary" not in st.session_state:
+    st.session_state.use_preflight_glossary = True
+
 
 def run_action(action_type: str, *, progress_slot=None):
     """공통 액션 실행 함수"""
@@ -401,7 +411,30 @@ def run_action(action_type: str, *, progress_slot=None):
         _set_progress(0, "준비 중...")
 
         if action_type == "translate_ppt":
-            glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
+            base_glossary = get_glossary_from_upload(glossary_file) if glossary_file else st.session_state.get("cached_glossary")
+            preflight_glossary = st.session_state.get("preflight_glossary_dict") if st.session_state.get("use_preflight_glossary", True) else {}
+            combined_glossary = {}
+            if preflight_glossary:
+                combined_glossary.update(preflight_glossary)
+            if base_glossary:
+                combined_glossary.update(base_glossary)
+
+            style_note = (st.session_state.get("preflight_style_note") or "").strip()
+            preflight_result = st.session_state.get("preflight_result")
+            ambiguous_spots = []
+            if isinstance(preflight_result, PreflightResult):
+                ambiguous_spots = preflight_result.ambiguous_spots
+
+            extra_segments: list[str] = []
+            if extra_prompt:
+                extra_segments.append(extra_prompt.strip())
+            if style_note:
+                extra_segments.append("[Style Note]\n" + style_note)
+            if ambiguous_spots:
+                bullets = "\n".join(f"- {item}" for item in ambiguous_spots)
+                extra_segments.append("[Potentially Ambiguous]\n" + bullets)
+            final_extra_prompt = "\n\n".join(segment for segment in extra_segments if segment)
+
             # 이미지 최적화 설정 가져오기 (전역 변수가 아니므로 함수 내에서 재참조)
             enable_img_opt = globals().get('enable_img_opt', False)
             img_quality = globals().get('img_quality', 70)
@@ -411,8 +444,8 @@ def run_action(action_type: str, *, progress_slot=None):
             cfg = TranslationConfig(
                 source_lang=st.session_state.get("source_lang", "auto"),
                 target_lang=st.session_state.get("target_lang", "en"),
-                glossary=glossary,
-                extra_instructions=extra_prompt,
+                glossary=combined_glossary or None,
+                extra_instructions=final_extra_prompt or None,
                 model=model,
             )
 
@@ -484,7 +517,7 @@ def run_action(action_type: str, *, progress_slot=None):
             try:
                 output_size_mb = os.path.getsize(output_pptx) / (1024 * 1024)
                 input_size_mb = os.path.getsize(st.session_state.uploaded_path) / (1024 * 1024) if st.session_state.uploaded_path else 0
-                glossary_count = len(glossary) if isinstance(glossary, dict) else 0
+                glossary_count = len(combined_glossary) if isinstance(combined_glossary, dict) else 0
                 glossary_part = f"{glossary_count}항목 적용" if glossary_count > 0 else "없음"
                 model_name = model if 'model' in locals() else getattr(cfg, 'model', 'unknown')
                 stats = stats or {}
@@ -564,6 +597,10 @@ if current_page == "extract":
             st.session_state.output_pptx_path = None
             st.session_state.output_pptx_name = None
             st.session_state.uploaded_file_meta = meta
+            st.session_state.preflight_result = None
+            st.session_state.preflight_glossary_dict = {}
+            st.session_state.preflight_style_note = ""
+            st.session_state.use_preflight_glossary = True
 
     extract_clicked = st.button("Markdown 변환", use_container_width=True, disabled=not st.session_state.uploaded_path)
     extract_progress_slot = st.empty()
@@ -636,6 +673,77 @@ elif current_page == "translate":
             st.session_state.output_pptx_path = None
             st.session_state.output_pptx_name = None
             st.session_state.uploaded_file_meta = meta
+
+    preflight_clicked = st.button("용어 분석 실행", use_container_width=True, disabled=not st.session_state.uploaded_path)
+    if preflight_clicked and st.session_state.uploaded_path:
+        _set_status(None)
+        with st.spinner("용어 분석 중..."):
+            try:
+                opts = ExtractOptions(with_notes=True, figures="placeholder", charts="labels")
+                docs = extract_pptx_to_docs(st.session_state.uploaded_path, opts)
+                result = run_preflight(
+                    docs,
+                    target_lang=st.session_state.get("target_lang", "en"),
+                    model_name=st.session_state.get("selected_model"),
+                )
+            except Exception as e:
+                st.session_state.preflight_result = None
+                st.session_state.preflight_glossary_dict = {}
+                st.session_state.preflight_style_note = ""
+                st.session_state.use_preflight_glossary = False
+                _set_status("error", f"용어 분석 실패: {e}")
+            else:
+                st.session_state.preflight_result = result
+                st.session_state.preflight_glossary_dict = {
+                    term.source_term: term.preferred_translation
+                    for term in result.terms
+                    if term.preferred_translation
+                }
+                st.session_state.preflight_style_note = result.style_note or ""
+                st.session_state.use_preflight_glossary = bool(st.session_state.preflight_glossary_dict)
+                if result.terms or result.style_note or result.ambiguous_spots:
+                    msg = "용어 분석이 완료되었습니다. 제안된 용어와 스타일 노트를 확인하세요."
+                else:
+                    msg = "용어 후보가 충분하지 않아 빈 Glossary로 유지합니다."
+                _set_status("success", msg)
+
+    if st.session_state.preflight_result:
+        st.divider()
+        st.subheader("전처리 결과")
+        result: PreflightResult = st.session_state.preflight_result
+
+        if result.terms:
+            st.checkbox(
+                "추천 용어를 번역에 적용",
+                key="use_preflight_glossary",
+                help="체크 해제 시 전처리에서 제안한 용어는 무시합니다.",
+            )
+            term_rows = [
+                {
+                    "원문": term.source_term,
+                    "추천 번역": term.preferred_translation or "",
+                    "분류": term.category or "",
+                    "비고": term.rationale or "",
+                }
+                for term in result.terms
+            ]
+            if term_rows:
+                if pd is not None:
+                    st.dataframe(pd.DataFrame(term_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.table(term_rows)
+        else:
+            st.info("추출된 용어 후보가 없습니다.")
+
+        style_note_input = st.text_area(
+            "스타일 노트 (필요시 수정)",
+            value=st.session_state.get("preflight_style_note", ""),
+            height=140,
+        )
+        st.session_state.preflight_style_note = style_note_input.strip()
+
+        if result.ambiguous_spots:
+            st.warning("다음 항목은 모호하거나 추가 확인이 필요합니다:\n" + "\n".join(f"• {item}" for item in result.ambiguous_spots))
 
     generate_clicked = st.button("번역된 PPT 생성", use_container_width=True, disabled=not st.session_state.uploaded_path)
     ppt_progress_slot = st.empty()
