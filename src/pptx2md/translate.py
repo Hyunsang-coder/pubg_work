@@ -124,9 +124,19 @@ def translate_texts(texts: List[str], config: TranslationConfig) -> List[str]:
     }
 
     try:
-        response: _TranslationPayload = chain.invoke(payload)
+        raw_response = chain.invoke(payload)
     except Exception as exc:
         raise RuntimeError("번역 응답을 가져오는데 실패했습니다.") from exc
+
+    if isinstance(raw_response, _TranslationPayload):
+        response = raw_response
+    elif isinstance(raw_response, dict):
+        try:
+            response = _TranslationPayload(**raw_response)
+        except Exception as exc:
+            raise RuntimeError("번역 응답 파싱에 실패했습니다.") from exc
+    else:
+        raise RuntimeError("예상치 못한 번역 응답 형식입니다.")
 
     decoded = response.result
     if len(decoded) != len(source_payload):

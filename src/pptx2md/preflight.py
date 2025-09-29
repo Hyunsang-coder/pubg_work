@@ -80,6 +80,21 @@ _TERM_PATTERNS: Sequence[re.Pattern[str]] = (
     re.compile(r"[가-힣]{4,}")  # Longer Korean words that may indicate specific concepts
 )
 
+_GENERIC_KOREAN_TERMS = {
+    "업데이트",
+    "업데이트를",
+    "업데이트에",
+    "행사",
+    "프로젝트",
+    "서비스",
+    "사용자",
+    "개발",
+    "테스트",
+    "출시",
+    "연도",
+    "여름방학",
+}
+
 
 def _iter_text_segments(docs: Iterable[SlideDoc]) -> Iterable[tuple[int, str, str]]:
     """Yield `(slide_index, slide_title, text)` for every textual element."""
@@ -129,6 +144,10 @@ def collect_term_candidates(
         snippet = text if len(text) <= 160 else text[:157] + "..."
         for term in _extract_terms_from_text(text):
             key = term.lower()
+            if term.isdigit():
+                continue
+            if term in _GENERIC_KOREAN_TERMS:
+                continue
             bucket = aggregates[key]
             bucket["count"] = int(bucket["count"]) + 1
             contexts: List[str] = bucket["contexts"]  # type: ignore[assignment]
@@ -181,7 +200,9 @@ def _build_preflight_chain(model_name: Optional[str] = None):
             "system",
             "You are a bilingual localization strategist for game publishing decks. "
             "Your job is to review terminology candidates, recommend consistent translations, "
-            "and highlight any ambiguous content. Always reply with JSON only.\n\n"
+            "and highlight any ambiguous content. Always reply with JSON only. "
+            "Focus on domain-specific brand names, map names, feature code names, event titles, or jargon that truly needs a glossary. "
+            "Skip generic industry words, schedules, seasons, plain numbers, or obvious translations.\n\n"
             "{format_instructions}",
         ),
         (
@@ -189,8 +210,9 @@ def _build_preflight_chain(model_name: Optional[str] = None):
             "Presentation outline:\n{outline}\n\n"
             "Terminology candidates (JSON):\n{candidates_json}\n\n"
             "Target translation language: {target_lang}.\n"
-            "Return any important glossary entries with suggested translations that suit "
-            "professional marketing/game development tone.",
+            "Only include glossary entries when they are unique to the project or brand, "
+            "or when the meaning is ambiguous enough to require guidance. If nothing qualifies, return an empty list."
+            " Highlight any spots that require clarification from the stakeholder.",
         ),
     ]).partial(format_instructions=parser.get_format_instructions())
 
@@ -206,7 +228,7 @@ def run_preflight(
     *,
     target_lang: str = "en",
     model_name: Optional[str] = None,
-    max_terms: int = 50,
+    max_terms: int = 35,
 ) -> PreflightResult:
     """Run the terminology preflight step. Falls back gracefully on failure."""
     docs = list(docs)

@@ -310,10 +310,10 @@ with st.sidebar:
         model = st.selectbox("OpenAI 모델", model_options, index=model_index)
         st.session_state.selected_model = model
         default_prompt = f"""1. {rule_one}
-2. 이미 {target_lang_label}로 된 문장/용어는 그대로 두거나 자연스럽게 다듬기만.
-3. 의미 유지 + 간결·명료, 길이는 원문 120 % 이내.
-4. 용어집 우선, 고유명사는 원형 유지.
-5. 개발·마케팅 실무자가 읽기 쉬운 자연스러운 표현 사용."""
+2. 이미 {target_lang_label}로 된 문장/용어는 그대로 두거나 자연스럽게 다듬기만
+3. 숨은 의미까지 정확히 파악해 간결 명료하게 번역
+4. 고유 명사/용어는 원형 유지
+5. 실무자가 쓴 것같은 자연스러운 표현 사용"""
         
         extra_prompt = st.text_area("번역 프롬프트", value=default_prompt, height=150, placeholder="톤, 스타일, 용어 규칙 등...")
         
@@ -385,6 +385,12 @@ if "preflight_style_note" not in st.session_state:
     st.session_state.preflight_style_note = ""
 if "use_preflight_glossary" not in st.session_state:
     st.session_state.use_preflight_glossary = True
+if "preflight_terms_data" not in st.session_state:
+    st.session_state.preflight_terms_data = None
+if "preflight_ambiguity_responses" not in st.session_state:
+    st.session_state.preflight_ambiguity_responses = {}
+if "preflight_result_version" not in st.session_state:
+    st.session_state.preflight_result_version = 0
 
 
 def run_action(action_type: str, *, progress_slot=None):
@@ -431,8 +437,16 @@ def run_action(action_type: str, *, progress_slot=None):
             if style_note:
                 extra_segments.append("[Style Note]\n" + style_note)
             if ambiguous_spots:
-                bullets = "\n".join(f"- {item}" for item in ambiguous_spots)
-                extra_segments.append("[Potentially Ambiguous]\n" + bullets)
+                responses_map = st.session_state.get("preflight_ambiguity_responses", {}) or {}
+                clarifications: list[str] = []
+                for item in ambiguous_spots:
+                    resolved = responses_map.get(item, "").strip()
+                    if resolved:
+                        clarifications.append(f"{item} → {resolved}")
+                    else:
+                        clarifications.append(f"{item} (추가 확인 필요)")
+                if clarifications:
+                    extra_segments.append("[Clarifications]\n" + "\n".join(f"- {line}" for line in clarifications))
             final_extra_prompt = "\n\n".join(segment for segment in extra_segments if segment)
 
             # 이미지 최적화 설정 가져오기 (전역 변수가 아니므로 함수 내에서 재참조)
@@ -601,6 +615,16 @@ if current_page == "extract":
             st.session_state.preflight_glossary_dict = {}
             st.session_state.preflight_style_note = ""
             st.session_state.use_preflight_glossary = True
+            st.session_state.preflight_terms_data = None
+            st.session_state.preflight_ambiguity_responses = {}
+            st.session_state.preflight_result_version = 0
+            st.session_state.preflight_result = None
+            st.session_state.preflight_glossary_dict = {}
+            st.session_state.preflight_style_note = ""
+            st.session_state.use_preflight_glossary = True
+            st.session_state.preflight_terms_data = None
+            st.session_state.preflight_ambiguity_responses = {}
+            st.session_state.preflight_result_version = 0
 
     extract_clicked = st.button("Markdown 변환", use_container_width=True, disabled=not st.session_state.uploaded_path)
     extract_progress_slot = st.empty()
@@ -694,13 +718,30 @@ elif current_page == "translate":
                 _set_status("error", f"용어 분석 실패: {e}")
             else:
                 st.session_state.preflight_result = result
-                st.session_state.preflight_glossary_dict = {
-                    term.source_term: term.preferred_translation
+                term_rows = [
+                    {
+                        "사용": True,
+                        "원문": term.source_term,
+                        "추천 번역": term.preferred_translation or "",
+                        "분류": term.category or "",
+                        "비고": term.rationale or "",
+                    }
                     for term in result.terms
-                    if term.preferred_translation
+                ]
+                if pd is not None:
+                    st.session_state.preflight_terms_data = pd.DataFrame(term_rows, columns=["사용", "원문", "추천 번역", "분류", "비고"])
+                else:
+                    st.session_state.preflight_terms_data = term_rows
+                initial_glossary = {
+                    row["원문"]: row["추천 번역"]
+                    for row in term_rows
+                    if row.get("원문") and row.get("추천 번역")
                 }
+                st.session_state.preflight_glossary_dict = initial_glossary
                 st.session_state.preflight_style_note = result.style_note or ""
                 st.session_state.use_preflight_glossary = bool(st.session_state.preflight_glossary_dict)
+                st.session_state.preflight_ambiguity_responses = {}
+                st.session_state.preflight_result_version = st.session_state.get("preflight_result_version", 0) + 1
                 if result.terms or result.style_note or result.ambiguous_spots:
                     msg = "용어 분석이 완료되었습니다. 제안된 용어와 스타일 노트를 확인하세요."
                 else:
@@ -718,20 +759,51 @@ elif current_page == "translate":
                 key="use_preflight_glossary",
                 help="체크 해제 시 전처리에서 제안한 용어는 무시합니다.",
             )
-            term_rows = [
-                {
-                    "원문": term.source_term,
-                    "추천 번역": term.preferred_translation or "",
-                    "분류": term.category or "",
-                    "비고": term.rationale or "",
-                }
-                for term in result.terms
-            ]
-            if term_rows:
-                if pd is not None:
-                    st.dataframe(pd.DataFrame(term_rows), use_container_width=True, hide_index=True)
-                else:
-                    st.table(term_rows)
+            st.caption("필요한 항목만 남기고 번역어를 직접 수정하거나 새 항목을 추가할 수 있습니다.")
+            if pd is not None:
+                if not isinstance(st.session_state.get("preflight_terms_data"), pd.DataFrame):
+                    st.session_state.preflight_terms_data = pd.DataFrame(
+                        [
+                            {
+                                "사용": True,
+                                "원문": term.source_term,
+                                "추천 번역": term.preferred_translation or "",
+                                "분류": term.category or "",
+                                "비고": term.rationale or "",
+                            }
+                            for term in result.terms
+                        ]
+                    )
+                terms_df = st.data_editor(
+                    st.session_state.preflight_terms_data,
+                    key="preflight_terms_editor_widget",
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    hide_index=True,
+                    column_config={
+                        "사용": st.column_config.CheckboxColumn("사용", help="체크 해제 시 Glossary에서 제외"),
+                        "원문": st.column_config.TextColumn("원문", required=True),
+                        "추천 번역": st.column_config.TextColumn("추천 번역"),
+                        "분류": st.column_config.TextColumn("분류"),
+                        "비고": st.column_config.TextColumn("비고"),
+                    },
+                )
+                st.session_state.preflight_terms_data = terms_df
+                sanitized = terms_df.fillna("")
+                glossary_dict: dict[str, str] = {}
+                for _, row in sanitized.iterrows():
+                    use_raw = row.get("사용", True)
+                    if pd.isna(use_raw):
+                        use_term = True
+                    else:
+                        use_term = bool(use_raw)
+                    source = str(row.get("원문", "")).strip()
+                    target = str(row.get("추천 번역", "")).strip()
+                    if use_term and source and target:
+                        glossary_dict[source] = target
+                st.session_state.preflight_glossary_dict = glossary_dict
+            else:
+                st.warning("pandas가 없어 용어 편집 기능을 사용할 수 없습니다. requirements.txt를 확인하세요.")
         else:
             st.info("추출된 용어 후보가 없습니다.")
 
@@ -743,7 +815,21 @@ elif current_page == "translate":
         st.session_state.preflight_style_note = style_note_input.strip()
 
         if result.ambiguous_spots:
-            st.warning("다음 항목은 모호하거나 추가 확인이 필요합니다:\n" + "\n".join(f"• {item}" for item in result.ambiguous_spots))
+            st.markdown("**추가 확인/클리어런스 필요한 항목**")
+            updated_responses: dict[str, str] = {}
+            version = st.session_state.get("preflight_result_version", 0)
+            for idx, item in enumerate(result.ambiguous_spots):
+                key = f"ambiguous_note_{version}_{idx}"
+                default_value = st.session_state.preflight_ambiguity_responses.get(item, "")
+                response = st.text_area(
+                    item,
+                    value=default_value,
+                    key=key,
+                    height=80,
+                    placeholder="확인 결과나 담당자 답변을 입력하면 번역 시 추가 지침에 포함됩니다.",
+                )
+                updated_responses[item] = response.strip()
+            st.session_state.preflight_ambiguity_responses = updated_responses
 
     generate_clicked = st.button("번역된 PPT 생성", use_container_width=True, disabled=not st.session_state.uploaded_path)
     ppt_progress_slot = st.empty()
